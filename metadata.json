@@ -1,0 +1,6 @@
+{
+  "name": "BuildConnect",
+  "description": "Unified construction marketplace for materials, machinery rentals, civil engineers, architects, skilled labour, and delivery tracking across India.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

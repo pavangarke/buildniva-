@@ -1,0 +1,2693 @@
+import fs from 'fs';
+import path from 'path';
+import crypto from 'crypto';
+import {
+  User,
+  MaterialProduct,
+  EquipmentListing,
+  ProfessionalProfile,
+  ProjectSample,
+  ProfessionalServiceOffering,
+  LabourProfile,
+  ContractorProfile,
+  Order,
+  EquipmentBooking,
+  ProfessionalBooking,
+  LabourRequest,
+  ContractorQuotation,
+  OrderStatus,
+  CustomerProject,
+  SavedAddress,
+  PaymentRecord,
+  FinancialLedgerEntry,
+  VendorSettlement,
+  DeliveryAgentProfile,
+  DeliveryAssignment,
+  AppNotification,
+  ReviewRecord,
+  SupportTicket,
+  AuditLog,
+  PlatformSettings,
+  UserRole,
+  ConstructionMilestone,
+  MilestoneTask,
+  MilestoneMaterialRequirement,
+  PriceAlert,
+} from '../src/types/index.js';
+
+export interface StoredUser extends User {
+  passwordHash?: string;
+}
+
+export interface AuthSession {
+  token: string;
+  userId: string;
+  createdAt: string;
+  expiresAt: string;
+}
+
+export function hashPassword(password: string): string {
+  const salt = crypto.randomBytes(16).toString('hex');
+  const derived = crypto.scryptSync(password, salt, 64).toString('hex');
+  return `${salt}:${derived}`;
+}
+
+export function verifyPassword(password: string, storedHash?: string): boolean {
+  if (!storedHash || !storedHash.includes(':')) return false;
+  const [salt, keyHex] = storedHash.split(':');
+  if (!salt || !keyHex) return false;
+  const keyBuf = Buffer.from(keyHex, 'hex');
+  const derivedBuf = crypto.scryptSync(password, salt, 64);
+  if (keyBuf.length !== derivedBuf.length) return false;
+  return crypto.timingSafeEqual(keyBuf, derivedBuf);
+}
+
+export function sanitizeUser(user: StoredUser): User {
+  const { passwordHash: _removed, ...safe } = user;
+  return safe;
+}
+
+interface DatabaseSchema {
+  users: StoredUser[];
+  sessions: AuthSession[];
+  materials: MaterialProduct[];
+  equipment: EquipmentListing[];
+  professionals: ProfessionalProfile[];
+  labourers: LabourProfile[];
+  contractors: ContractorProfile[];
+  orders: Order[];
+  equipmentBookings: EquipmentBooking[];
+  professionalBookings: ProfessionalBooking[];
+  labourRequests: LabourRequest[];
+  contractorQuotations: ContractorQuotation[];
+  projects: CustomerProject[];
+  addresses: SavedAddress[];
+  payments: PaymentRecord[];
+  financialLedger: FinancialLedgerEntry[];
+  vendorSettlements: VendorSettlement[];
+  deliveryAgents: DeliveryAgentProfile[];
+  deliveryAssignments: DeliveryAssignment[];
+  notifications: AppNotification[];
+  priceAlerts: PriceAlert[];
+  reviews: ReviewRecord[];
+  supportTickets: SupportTicket[];
+  auditLogs: AuditLog[];
+  platformSettings: PlatformSettings;
+}
+
+const DB_DIR = path.resolve(process.cwd(), 'data');
+const DB_FILE = path.join(DB_DIR, 'buildconnect_data.json');
+
+const INITIAL_USERS: User[] = [
+  {
+    id: 'usr_cust_01',
+    name: 'Vikram Malhotra',
+    email: 'vikram.customer@buildconnect.in',
+    phone: '+91 98201 44521',
+    role: 'customer',
+    approvedRoles: ['customer'],
+    city: 'Bengaluru',
+    pincode: '560034',
+    verificationStatus: 'approved',
+  },
+  {
+    id: 'usr_vend_01',
+    name: 'Manoj Agarwal',
+    email: 'manoj@agarwalmaterials.in',
+    phone: '+91 94140 88219',
+    role: 'vendor',
+    approvedRoles: ['vendor', 'customer'],
+    businessName: 'Agarwal Cement & Steel Traders',
+    city: 'Bengaluru',
+    pincode: '560034',
+    verificationStatus: 'approved',
+  },
+  {
+    id: 'usr_vend_02',
+    name: 'Suresh Patil',
+    email: 'suresh@deccanbricks.in',
+    phone: '+91 98450 11982',
+    role: 'vendor',
+    approvedRoles: ['vendor'],
+    businessName: 'Deccan AAC Blocks & Aggregates',
+    city: 'Bengaluru',
+    pincode: '560068',
+    verificationStatus: 'approved',
+  },
+  {
+    id: 'usr_eq_01',
+    name: 'Karan Bhasin',
+    email: 'karan@bhasinearthmovers.in',
+    phone: '+91 98110 33290',
+    role: 'equipment_provider',
+    approvedRoles: ['equipment_provider'],
+    businessName: 'Bhasin Heavy Fleet & Machinery Rentals',
+    city: 'Bengaluru',
+    pincode: '560048',
+    verificationStatus: 'approved',
+  },
+  {
+    id: 'usr_pro_01',
+    name: 'Er. Rajesh Sharma',
+    email: 'rajesh.sharma@structures.in',
+    phone: '+91 98230 77123',
+    role: 'professional',
+    approvedRoles: ['professional'],
+    businessName: 'Apex Structural Consultants',
+    city: 'Bengaluru',
+    pincode: '560001',
+    verificationStatus: 'approved',
+    avatar: 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?auto=format&fit=crop&w=400&q=80',
+  },
+  {
+    id: 'usr_labour_01',
+    name: 'Rameshwar Yadav',
+    email: 'rameshwar.mason@buildconnect.in',
+    phone: '+91 99120 44331',
+    role: 'labourer',
+    approvedRoles: ['labourer'],
+    city: 'Bengaluru',
+    pincode: '560037',
+    verificationStatus: 'approved',
+  },
+  {
+    id: 'usr_cont_01',
+    name: 'Arjun Kulkarni',
+    email: 'arjun@kulkarnibuilders.in',
+    phone: '+91 98860 55412',
+    role: 'contractor',
+    approvedRoles: ['contractor'],
+    businessName: 'Kulkarni Infra & Turnkey Constructions',
+    city: 'Bengaluru',
+    pincode: '560100',
+    verificationStatus: 'approved',
+  },
+  {
+    id: 'usr_del_01',
+    name: 'Ganesh Shinde',
+    email: 'ganesh.delivery@buildconnect.in',
+    phone: '+91 97654 32100',
+    role: 'delivery_agent',
+    approvedRoles: ['delivery_agent'],
+    city: 'Bengaluru',
+    pincode: '560034',
+    verificationStatus: 'approved',
+  },
+  {
+    id: 'usr_adm_01',
+    name: 'Pavan Garke',
+    email: 'admin@buildniva.in',
+    phone: '+91 99999 88888',
+    role: 'admin',
+    approvedRoles: ['admin', 'customer'],
+    businessName: 'BuildNiva HQ',
+    city: 'Bengaluru',
+    pincode: '560001',
+    verificationStatus: 'approved',
+  },
+];
+
+const INITIAL_MATERIALS: MaterialProduct[] = [
+  {
+    id: 'mat_01',
+    name: 'UltraTech Super Weather Plus Cement (OPC 53 Grade)',
+    category: 'Cement',
+    brand: 'UltraTech Cement',
+    description: 'High performance water-repellent cement with micro-fine particles providing exceptional structural strength and dampness protection.',
+    vendorId: 'usr_vend_01',
+    vendorName: 'Agarwal Cement & Steel Traders',
+    vendorCity: 'Bengaluru',
+    unit: 'bag',
+    pricePerUnit: 395,
+    mrp: 440,
+    gstRate: 28,
+    minOrderQty: 2,
+    availableStock: 1850,
+    bulkTiers: [
+      { minQty: 50, pricePerUnit: 385 },
+      { minQty: 200, pricePerUnit: 370 },
+      { minQty: 500, pricePerUnit: 358 },
+    ],
+    serviceablePincodes: ['560001', '560034', '560068', '560048', '560100', '560037'],
+    deliveryEstimateDays: 1,
+    deliveryChargePerUnit: 8,
+    specifications: {
+      Grade: '53 Grade Ordinary Portland Cement',
+      Standard: 'IS: 269:2015',
+      Packaging: '50 kg Tamper-proof Polypropylene Laminated Bag',
+      Application: 'Slab casting, columns, footings, load-bearing walls',
+    },
+    returnEligible: true,
+    status: 'active',
+    rating: 4.8,
+    reviewCount: 342,
+    imageFallbackCategory: 'cement',
+  },
+  {
+    id: 'mat_02',
+    name: 'Tata Tiscon 550D High Ductility Fe-550 TMT Rebar (12mm)',
+    category: 'TMT Steel',
+    brand: 'Tata Tiscon',
+    description: 'Primary steel ribbed reinforcement bars with enhanced ductility, superior earthquake resistance, and uniform rib pattern.',
+    vendorId: 'usr_vend_01',
+    vendorName: 'Agarwal Cement & Steel Traders',
+    vendorCity: 'Bengaluru',
+    unit: 'tonne',
+    pricePerUnit: 64500,
+    mrp: 69000,
+    gstRate: 18,
+    minOrderQty: 1,
+    availableStock: 48,
+    bulkTiers: [
+      { minQty: 3, pricePerUnit: 63200 },
+      { minQty: 10, pricePerUnit: 61800 },
+    ],
+    serviceablePincodes: ['560001', '560034', '560068', '560048', '560100'],
+    deliveryEstimateDays: 2,
+    deliveryChargePerUnit: 850,
+    specifications: {
+      Diameter: '12 mm standard gauge',
+      Grade: 'Fe 550D IS 1786 certified',
+      Length: '12 meters standard rod length',
+      CorrosionResistance: 'Super Ductile with low carbon percentage',
+    },
+    returnEligible: false,
+    status: 'active',
+    rating: 4.9,
+    reviewCount: 218,
+    imageFallbackCategory: 'steel',
+  },
+  {
+    id: 'mat_03',
+    name: 'Birla Aerocon High-Strength Autoclaved Aerated Concrete (AAC) Blocks',
+    category: 'Bricks & Blocks',
+    brand: 'Birla Aerocon',
+    description: 'Lightweight, thermally insulated, fire-resistant precision masonry blocks. Reduces structural dead weight by up to 50%.',
+    vendorId: 'usr_vend_02',
+    vendorName: 'Deccan AAC Blocks & Aggregates',
+    vendorCity: 'Bengaluru',
+    unit: 'piece',
+    pricePerUnit: 62,
+    mrp: 75,
+    gstRate: 18,
+    minOrderQty: 200,
+    availableStock: 8400,
+    bulkTiers: [
+      { minQty: 500, pricePerUnit: 58 },
+      { minQty: 1500, pricePerUnit: 54 },
+    ],
+    serviceablePincodes: ['560001', '560034', '560068', '560048', '560100', '560037'],
+    deliveryEstimateDays: 2,
+    deliveryChargePerUnit: 2.5,
+    specifications: {
+      Dimensions: '600mm x 200mm x 150mm (6-inch)',
+      CompressiveStrength: '3.5 N/mm²',
+      DryDensity: '550 - 650 kg/m³',
+      SoundInsulation: '42 dB acoustic attenuation',
+    },
+    returnEligible: true,
+    status: 'active',
+    rating: 4.7,
+    reviewCount: 129,
+    imageFallbackCategory: 'bricks',
+  },
+  {
+    id: 'mat_04',
+    name: 'Triple-Washed Robo Manufactured Sand (M-Sand) for Plastering',
+    category: 'Sand & Aggregates',
+    brand: 'Deccan EcoAggregates',
+    description: 'Zero silt, cubical particle shape machine-crushed sand certified for high-strength RCC and ultra-smooth wall plastering.',
+    vendorId: 'usr_vend_02',
+    vendorName: 'Deccan AAC Blocks & Aggregates',
+    vendorCity: 'Bengaluru',
+    unit: 'brass',
+    pricePerUnit: 4200,
+    mrp: 4800,
+    gstRate: 5,
+    minOrderQty: 2,
+    availableStock: 65,
+    bulkTiers: [
+      { minQty: 5, pricePerUnit: 3950 },
+      { minQty: 12, pricePerUnit: 3800 },
+    ],
+    serviceablePincodes: ['560001', '560034', '560068', '560048', '560100'],
+    deliveryEstimateDays: 1,
+    deliveryChargePerUnit: 350,
+    specifications: {
+      GrainSize: 'Zone II classification (0.15mm - 4.75mm)',
+      SiltContent: '< 2% certified laboratory test',
+      Packaging: 'Direct dump truck (1 brass = 100 cu.ft)',
+    },
+    returnEligible: false,
+    status: 'active',
+    rating: 4.6,
+    reviewCount: 94,
+    imageFallbackCategory: 'sand',
+  },
+  {
+    id: 'mat_05',
+    name: 'Dr. Fixit 101 LW+ Integral Liquid Waterproofing Compound',
+    category: 'Waterproofing',
+    brand: 'Dr. Fixit (Pidilite)',
+    description: 'Specially formulated liquid additive for concrete and mortar that reduces water permeability and prevents steel rebar rusting.',
+    vendorId: 'usr_vend_01',
+    vendorName: 'Agarwal Cement & Steel Traders',
+    vendorCity: 'Bengaluru',
+    unit: 'litre',
+    pricePerUnit: 148,
+    mrp: 175,
+    gstRate: 18,
+    minOrderQty: 5,
+    availableStock: 420,
+    bulkTiers: [
+      { minQty: 20, pricePerUnit: 135 },
+      { minQty: 50, pricePerUnit: 122 },
+    ],
+    serviceablePincodes: ['560001', '560034', '560068', '560048', '560100', '560037'],
+    deliveryEstimateDays: 1,
+    deliveryChargePerUnit: 5,
+    specifications: {
+      Dosage: '200 ml per 50 kg bag of cement',
+      Standard: 'IS: 2645-2003 & IS: 9103-2000',
+      Container: 'Available in 5L & 20L plastic carboys',
+    },
+    returnEligible: true,
+    status: 'active',
+    rating: 4.9,
+    reviewCount: 310,
+    imageFallbackCategory: 'waterproofing',
+  },
+  {
+    id: 'mat_06',
+    name: 'Asian Paints Apex Ultima Protek Exterior Emulsion Paint (White)',
+    category: 'Paints & Coatings',
+    brand: 'Asian Paints',
+    description: 'Lamination-grade anti-algal, crack-bridging exterior wall emulsion with 10-year durability warranty against extreme weather.',
+    vendorId: 'usr_vend_01',
+    vendorName: 'Agarwal Cement & Steel Traders',
+    vendorCity: 'Bengaluru',
+    unit: 'litre',
+    pricePerUnit: 380,
+    mrp: 445,
+    gstRate: 18,
+    minOrderQty: 10,
+    availableStock: 250,
+    bulkTiers: [{ minQty: 40, pricePerUnit: 350 }],
+    serviceablePincodes: ['560001', '560034', '560068', '560048', '560100'],
+    deliveryEstimateDays: 2,
+    deliveryChargePerUnit: 8,
+    specifications: {
+      Coverage: '55 - 65 sq.ft / litre for 2 coats',
+      Finish: 'Rich soft sheen',
+      Warranty: '10 Years Performance Warranty',
+    },
+    returnEligible: true,
+    status: 'active',
+    rating: 4.8,
+    reviewCount: 165,
+    imageFallbackCategory: 'paints',
+  },
+];
+
+const INITIAL_EQUIPMENT: EquipmentListing[] = [
+  {
+    id: 'eq_01',
+    name: 'JCB 3DX Plus EcoXcellence Backhoe Loader (with Breaker attachment)',
+    category: 'Earth Moving',
+    model: 'JCB 3DX Plus 2024 BS-IV',
+    providerId: 'usr_eq_01',
+    providerName: 'Bhasin Heavy Fleet & Machinery Rentals',
+    city: 'Bengaluru',
+    hourlyRate: 1100,
+    dailyRate: 8500,
+    weeklyRate: 52000,
+    minDurationDays: 1,
+    securityDeposit: 15000,
+    operatorAvailable: true,
+    operatorChargePerDay: 800,
+    fuelIncluded: false,
+    specifications: {
+      EnginePower: '74 HP CRDI Turbocharged',
+      LoaderBucket: '1.1 cu.m shovel capacity',
+      ExcavatorReach: '4.77 meters max digging depth',
+      Attachments: 'Rock Breaker, Heavy Trenching Bucket available',
+    },
+    serviceRadiusKm: 45,
+    available: true,
+    blockedDates: ['2026-11-02', '2026-11-03'],
+    rating: 4.9,
+    reviewCount: 78,
+  },
+  {
+    id: 'eq_02',
+    name: 'Ajax Fiori ARGO 4000 Self-Loading Concrete Mobile Mixer (4 cu.m)',
+    category: 'Concrete & Compaction',
+    model: 'Ajax ARGO 4000 4x4 Off-Highway',
+    providerId: 'usr_eq_01',
+    providerName: 'Bhasin Heavy Fleet & Machinery Rentals',
+    city: 'Bengaluru',
+    dailyRate: 12500,
+    weeklyRate: 78000,
+    minDurationDays: 2,
+    securityDeposit: 25000,
+    operatorAvailable: true,
+    operatorChargePerDay: 1000,
+    fuelIncluded: false,
+    specifications: {
+      DrumOutput: '4.0 cubic meters per batch',
+      BatchingAccuracy: 'Electronic weigh-batching system (±2% tolerance)',
+      Steering: '4-wheel drive crab steering for congested sites',
+    },
+    serviceRadiusKm: 50,
+    available: true,
+    blockedDates: [],
+    rating: 4.8,
+    reviewCount: 42,
+  },
+  {
+    id: 'eq_03',
+    name: 'Cuplock Modular Heavy Scaffolding & Shuttering Set (1,000 sq.ft)',
+    category: 'Scaffolding & Formwork',
+    model: 'Galvanized Mild Steel Heavy Duty',
+    providerId: 'usr_eq_01',
+    providerName: 'Bhasin Heavy Fleet & Machinery Rentals',
+    city: 'Bengaluru',
+    dailyRate: 1800,
+    weeklyRate: 9800,
+    minDurationDays: 7,
+    securityDeposit: 12000,
+    operatorAvailable: false,
+    operatorChargePerDay: 0,
+    fuelIncluded: false,
+    specifications: {
+      Coverage: '1,000 sq.ft working staging area',
+      Pipes: '48.3 mm OD Heavy B-Class Steel',
+      Components: 'Ledgers, Verticals, Base Jacks, U-Jacks & Walkway Planks',
+    },
+    serviceRadiusKm: 60,
+    available: true,
+    blockedDates: [],
+    rating: 4.7,
+    reviewCount: 56,
+  },
+  {
+    id: 'eq_04',
+    name: 'Kirloskar 125 kVA Silent Diesel Generator with AMF Panel',
+    category: 'Power & Generators',
+    model: 'Kirloskar Green CPCB-IV+ Compliant',
+    providerId: 'usr_eq_01',
+    providerName: 'Bhasin Heavy Fleet & Machinery Rentals',
+    city: 'Bengaluru',
+    dailyRate: 4500,
+    weeklyRate: 26000,
+    minDurationDays: 1,
+    securityDeposit: 10000,
+    operatorAvailable: true,
+    operatorChargePerDay: 600,
+    fuelIncluded: false,
+    specifications: {
+      Capacity: '125 kVA / 100 kWe 3-Phase 415V',
+      NoiseLevel: '< 75 dBA at 1 meter',
+      FuelConsumption: 'Approx 22 litres/hr at 75% load',
+    },
+    serviceRadiusKm: 40,
+    available: true,
+    blockedDates: [],
+    rating: 4.9,
+    reviewCount: 63,
+  },
+];
+
+const INITIAL_PROFESSIONALS: ProfessionalProfile[] = [
+  {
+    id: 'pro_01',
+    name: 'Er. Rajesh Sharma, M.Tech (Structures)',
+    title: 'Senior Chartered Structural Engineer',
+    registrationNumber: 'IEI/STR/2012/84920',
+    experienceYears: 16,
+    specialization: 'Civil & Structural Engineer',
+    city: 'Bengaluru',
+    serviceableCities: ['Bengaluru', 'Mysuru', 'Hosur'],
+    education: 'M.Tech Structural Engineering, IIT Madras',
+    consultationFee: 1499,
+    siteVisitFee: 3999,
+    planApprovalFee: 18500,
+    structuralDrawingsRate: 12500,
+    architecturalPlansRate: 18000,
+    mepDesignsRate: 9500,
+    siteAuditsRate: 4500,
+    bio: 'Specialist in earthquake-resistant RCC frame designs, G+4 residential villas, retrofitting, and structural stability certification.',
+    languages: ['English', 'Kannada', 'Hindi'],
+    rating: 4.9,
+    completedProjects: 184,
+    verificationStatus: 'approved',
+    avatarUrl: 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?auto=format&fit=crop&w=400&q=80',
+    profilePic: 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?auto=format&fit=crop&w=400&q=80',
+    portfolioProjects: [
+      {
+        id: 'proj_01_1',
+        title: 'G+3 Residential Villa RCC Structural Framing & Column Layout',
+        category: 'Structural Drawings',
+        imageUrl: 'https://images.unsplash.com/photo-1503387762-592deb58ef4e?auto=format&fit=crop&w=1000&q=80',
+        description: 'Complete CAD structural drawings showing column-beam junction reinforcement, raft foundation schedules, and seismic moment frame details.',
+        projectType: 'Residential Villa (G+3)',
+        dateAdded: '2026-02-15',
+      },
+      {
+        id: 'proj_01_2',
+        title: 'Contemporary 4BHK Villa 3D Exterior BIM Model',
+        category: '3D Architectural Plans',
+        imageUrl: 'https://images.unsplash.com/photo-1600585154340-be6161a56a0c?auto=format&fit=crop&w=1000&q=80',
+        description: 'Photorealistic exterior architectural elevation with cantilevered overhangs, textured concrete facade, and passive daylighting analysis.',
+        projectType: 'Luxury Villa',
+        dateAdded: '2026-03-01',
+      },
+      {
+        id: 'proj_01_3',
+        title: 'Multi-Floor Sanitary & Storm-Water MEP Schematics',
+        category: 'MEP Designs',
+        imageUrl: 'https://images.unsplash.com/photo-1581092160607-ee22621dd758?auto=format&fit=crop&w=1000&q=80',
+        description: 'Dual-plumbing sanitary riser schematics, rainwater harvesting recharge pits, and gravity water pressure distribution layout.',
+        projectType: 'Apartment Complex',
+        dateAdded: '2026-01-20',
+      },
+      {
+        id: 'proj_01_4',
+        title: 'Pre-Pour RCC Slab Reinforcement Quality Audit',
+        category: 'Site Audits',
+        imageUrl: 'https://images.unsplash.com/photo-1504307651254-35680f356dfd?auto=format&fit=crop&w=1000&q=80',
+        description: 'Comprehensive site audit inspecting steel lap lengths, clear cover block integrity, conduit spacing, and formwork stability prior to concrete pouring.',
+        projectType: 'Commercial Complex',
+        dateAdded: '2026-02-28',
+      },
+    ],
+    servicesOffered: [
+      {
+        key: 'structural_drawings',
+        title: 'Structural Drawings & Framing',
+        description: 'RCC frame design, footing & column layout, beam schedules, and seismic stability compliance drawings.',
+        startingPrice: 12500,
+        deliveryTime: '3-5 Working Days',
+        enabled: true,
+      },
+      {
+        key: '3d_architectural_plans',
+        title: '3D Architectural Plans & Renders',
+        description: 'Photorealistic 3D elevations, Vastu-compliant 2D floor layouts, BIM modeling, and material mood boards.',
+        startingPrice: 18000,
+        deliveryTime: '4-7 Working Days',
+        enabled: true,
+      },
+      {
+        key: 'mep_designs',
+        title: 'MEP Designs (Mechanical, Electrical, Plumbing)',
+        description: 'Sanitary plumbing risers, drainage network, electrical distribution schematics, and solar/HVAC conduit planning.',
+        startingPrice: 9500,
+        deliveryTime: '3-4 Working Days',
+        enabled: true,
+      },
+      {
+        key: 'site_audits',
+        title: 'Site Audits & Structural Inspection',
+        description: 'Pre-pour rebar inspection, Schmidt rebound hammer testing, crack diagnosis, and certified structural health audit reports.',
+        startingPrice: 4500,
+        deliveryTime: '1-2 Working Days (On-Site)',
+        enabled: true,
+      },
+    ],
+  },
+  {
+    id: 'pro_02',
+    name: 'Ar. Priya Sunderam, B.Arch, IIA',
+    title: 'Lead Architect & Biophilic Designer',
+    registrationNumber: 'COA/2016/73918',
+    experienceYears: 11,
+    specialization: 'Architectural Design',
+    city: 'Bengaluru',
+    serviceableCities: ['Bengaluru', 'Hyderabad', 'Chennai'],
+    education: 'School of Planning and Architecture (SPA)',
+    consultationFee: 1200,
+    siteVisitFee: 3500,
+    planApprovalFee: 24000,
+    structuralDrawingsRate: 14000,
+    architecturalPlansRate: 22000,
+    mepDesignsRate: 11000,
+    siteAuditsRate: 4000,
+    bio: 'Award-winning sustainable architectural planning, Vastu-compliant layouts, courtyard homes, and luxury turnkey residential designs.',
+    languages: ['English', 'Tamil', 'Kannada', 'Hindi'],
+    rating: 4.9,
+    completedProjects: 142,
+    verificationStatus: 'approved',
+    avatarUrl: 'https://images.unsplash.com/photo-1573496359142-b8d87734a5a2?auto=format&fit=crop&w=400&q=80',
+    profilePic: 'https://images.unsplash.com/photo-1573496359142-b8d87734a5a2?auto=format&fit=crop&w=400&q=80',
+    portfolioProjects: [
+      {
+        id: 'proj_02_1',
+        title: 'Sustainable Courtyard Villa 3D Architectural Elevation',
+        category: '3D Architectural Plans',
+        imageUrl: 'https://images.unsplash.com/photo-1600596542815-ffad4c1539a9?auto=format&fit=crop&w=1000&q=80',
+        description: 'Biophilic courtyard home with cross-ventilation corridors, central water body, double-height living room, and sun-angle calculated pergolas.',
+        projectType: 'Residential Courtyard Villa',
+        dateAdded: '2026-03-05',
+      },
+      {
+        id: 'proj_02_2',
+        title: 'Earthquake-Resistant Sloping Terrain Structural Drawings',
+        category: 'Structural Drawings',
+        imageUrl: 'https://images.unsplash.com/photo-1541888946425-d0fbb186c5f7?auto=format&fit=crop&w=1000&q=80',
+        description: 'Structural working drawings for sloping terrain foundation with stepped footings and reinforced concrete cantilever retaining walls.',
+        projectType: 'Hillside Residence',
+        dateAdded: '2026-01-18',
+      },
+      {
+        id: 'proj_02_3',
+        title: 'Solar PV & Smart Lighting MEP Conduit Layout',
+        category: 'MEP Designs',
+        imageUrl: 'https://images.unsplash.com/photo-1581092335397-9583fe92d232?auto=format&fit=crop&w=1000&q=80',
+        description: 'Complete electrical distribution routing with dedicated solar inverter tie-in, home automation conduit pathways, and earthing pit details.',
+        projectType: 'Net-Zero Home',
+        dateAdded: '2026-02-10',
+      },
+      {
+        id: 'proj_02_4',
+        title: 'Stage-Wise Architectural Finishes & Water Audit',
+        category: 'Site Audits',
+        imageUrl: 'https://images.unsplash.com/photo-1517581177682-a085bb7ffb15?auto=format&fit=crop&w=1000&q=80',
+        description: 'Quality inspection auditing waterproofing membrane pond testing, floor screed slopes, door/window jamb alignments, and plaster plumb lines.',
+        projectType: 'Turnkey Residence',
+        dateAdded: '2026-03-12',
+      },
+    ],
+    servicesOffered: [
+      {
+        key: '3d_architectural_plans',
+        title: '3D Architectural Plans & BIM Models',
+        description: 'Photorealistic 3D elevations, Vastu-compliant 2D floor layouts, BIM modeling, and material mood boards.',
+        startingPrice: 22000,
+        deliveryTime: '4-7 Working Days',
+        enabled: true,
+      },
+      {
+        key: 'structural_drawings',
+        title: 'Structural Drawings & Framing',
+        description: 'RCC frame design, footing & column layout, beam schedules, and seismic stability compliance drawings.',
+        startingPrice: 14000,
+        deliveryTime: '3-5 Working Days',
+        enabled: true,
+      },
+      {
+        key: 'mep_designs',
+        title: 'MEP Designs (Mechanical, Electrical, Plumbing)',
+        description: 'Sanitary plumbing risers, drainage network, electrical distribution schematics, and solar/HVAC conduit planning.',
+        startingPrice: 11000,
+        deliveryTime: '3-4 Working Days',
+        enabled: true,
+      },
+      {
+        key: 'site_audits',
+        title: 'Site Audits & Quality Inspection',
+        description: 'Pre-pour rebar inspection, Schmidt rebound hammer testing, crack diagnosis, and certified structural health audit reports.',
+        startingPrice: 4000,
+        deliveryTime: '1-2 Working Days (On-Site)',
+        enabled: true,
+      },
+    ],
+  },
+  {
+    id: 'pro_03',
+    name: 'Er. Arvind Joshi, B.E. (Civil)',
+    title: 'Senior Quantity Surveyor & Cost Estimator',
+    registrationNumber: 'RICS/QS/2018/1092',
+    experienceYears: 14,
+    specialization: 'Quantity Surveyor & Estimator',
+    city: 'Bengaluru',
+    serviceableCities: ['Bengaluru', 'Pune'],
+    education: 'B.E. Civil, VJTI Mumbai',
+    consultationFee: 999,
+    siteVisitFee: 2999,
+    planApprovalFee: 12000,
+    structuralDrawingsRate: 11000,
+    architecturalPlansRate: 15000,
+    mepDesignsRate: 8500,
+    siteAuditsRate: 3500,
+    bio: 'Precision Bill of Quantities (BOQ), material rate analysis, contractor quote auditing, and construction cash-flow optimization.',
+    languages: ['English', 'Marathi', 'Hindi'],
+    rating: 4.8,
+    completedProjects: 230,
+    verificationStatus: 'approved',
+    avatarUrl: 'https://images.unsplash.com/photo-1500648767791-00dcc994a43e?auto=format&fit=crop&w=400&q=80',
+    profilePic: 'https://images.unsplash.com/photo-1500648767791-00dcc994a43e?auto=format&fit=crop&w=400&q=80',
+    portfolioProjects: [
+      {
+        id: 'proj_03_1',
+        title: 'Reinforced Concrete Quantity Take-Off & Structural BOQ Plan',
+        category: 'Structural Drawings',
+        imageUrl: 'https://images.unsplash.com/photo-1503387762-592deb58ef4e?auto=format&fit=crop&w=1000&q=80',
+        description: 'Detailed steel bar bending schedule (BBS) and structural concrete grade estimation drawings.',
+        projectType: 'Commercial Mall',
+        dateAdded: '2026-01-10',
+      },
+      {
+        id: 'proj_03_2',
+        title: 'Civil Construction Quality & Billing Audit',
+        category: 'Site Audits',
+        imageUrl: 'https://images.unsplash.com/photo-1504307651254-35680f356dfd?auto=format&fit=crop&w=1000&q=80',
+        description: 'Measurement book (MB) physical verification and construction material consumption audit.',
+        projectType: 'Industrial Warehouse',
+        dateAdded: '2026-02-14',
+      },
+    ],
+    servicesOffered: [
+      {
+        key: 'structural_drawings',
+        title: 'Structural Drawings & Framing',
+        description: 'RCC frame design, footing & column layout, beam schedules, and seismic stability compliance drawings.',
+        startingPrice: 11000,
+        deliveryTime: '3-5 Working Days',
+        enabled: true,
+      },
+      {
+        key: 'site_audits',
+        title: 'Site Audits & Billing Verification',
+        description: 'Physical work verification, bill of quantities audit, and certified milestone completion reports.',
+        startingPrice: 3500,
+        deliveryTime: '1-2 Working Days (On-Site)',
+        enabled: true,
+      },
+    ],
+  },
+];
+
+const INITIAL_LABOUR: LabourProfile[] = [
+  {
+    id: 'lab_01',
+    name: 'Rameshwar Yadav & 5-Mason Team',
+    trade: 'Mason (Rajmistri)',
+    dailyWage: 950,
+    experienceYears: 15,
+    city: 'Bengaluru',
+    isTeam: true,
+    teamSize: 6,
+    languages: ['Hindi', 'Kannada'],
+    availableNow: true,
+    rating: 4.8,
+    verified: true,
+    contactMasked: '+91 99120 •••••',
+    photoUrl: 'https://images.unsplash.com/photo-1541888946425-d0fbb186c5f7?auto=format&fit=crop&w=400&q=80',
+    workPhotos: [
+      'https://images.unsplash.com/photo-1589939705384-5185137a7f0f?auto=format&fit=crop&w=800&q=80',
+      'https://images.unsplash.com/photo-1590381105924-c72589b9ef3f?auto=format&fit=crop&w=800&q=80',
+      'https://images.unsplash.com/photo-1504307651254-35680f356dfd?auto=format&fit=crop&w=800&q=80',
+    ],
+  },
+  {
+    id: 'lab_02',
+    name: 'Suresh Kumar Verma',
+    trade: 'Bar Bender (Steel Fixer)',
+    dailyWage: 850,
+    experienceYears: 9,
+    city: 'Bengaluru',
+    isTeam: false,
+    languages: ['Hindi', 'English'],
+    availableNow: true,
+    rating: 4.7,
+    verified: true,
+    contactMasked: '+91 98440 •••••',
+    photoUrl: 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?auto=format&fit=crop&w=400&q=80',
+    workPhotos: [
+      'https://images.unsplash.com/photo-1504307651254-35680f356dfd?auto=format&fit=crop&w=800&q=80',
+      'https://images.unsplash.com/photo-1541888946425-d0fbb186c5f7?auto=format&fit=crop&w=800&q=80',
+      'https://images.unsplash.com/photo-1513694203232-719a280e022f?auto=format&fit=crop&w=800&q=80',
+    ],
+  },
+  {
+    id: 'lab_03',
+    name: 'Anand Shuttering & Centring Crew',
+    trade: 'Shuttering Carpenter',
+    dailyWage: 900,
+    experienceYears: 12,
+    city: 'Bengaluru',
+    isTeam: true,
+    teamSize: 8,
+    languages: ['Kannada', 'Telugu', 'Hindi'],
+    availableNow: true,
+    rating: 4.9,
+    verified: true,
+    contactMasked: '+91 97410 •••••',
+    photoUrl: 'https://images.unsplash.com/photo-1500648767791-00dcc994a43e?auto=format&fit=crop&w=400&q=80',
+    workPhotos: [
+      'https://images.unsplash.com/photo-1581092160607-ee22621dd758?auto=format&fit=crop&w=800&q=80',
+      'https://images.unsplash.com/photo-1503387762-592deb58ef4e?auto=format&fit=crop&w=800&q=80',
+      'https://images.unsplash.com/photo-1600585154340-be6161a56a0c?auto=format&fit=crop&w=800&q=80',
+    ],
+  },
+  {
+    id: 'lab_04',
+    name: 'Mohammad Farooq',
+    trade: 'Plumber',
+    dailyWage: 800,
+    experienceYears: 10,
+    city: 'Bengaluru',
+    isTeam: false,
+    languages: ['Hindi', 'Urdu', 'English'],
+    availableNow: true,
+    rating: 4.8,
+    verified: true,
+    contactMasked: '+91 96320 •••••',
+    photoUrl: 'https://images.unsplash.com/photo-1472099645785-5658abf4ff4e?auto=format&fit=crop&w=400&q=80',
+    workPhotos: [
+      'https://images.unsplash.com/photo-1581092335397-9583fe92d232?auto=format&fit=crop&w=800&q=80',
+      'https://images.unsplash.com/photo-1517581177682-a085bb7ffb15?auto=format&fit=crop&w=800&q=80',
+      'https://images.unsplash.com/photo-1584622650111-993a426fbf0a?auto=format&fit=crop&w=800&q=80',
+    ],
+  },
+];
+
+const INITIAL_CONTRACTORS: ContractorProfile[] = [
+  {
+    id: 'cont_01',
+    businessName: 'Kulkarni Infra & Turnkey Constructions',
+    leadPerson: 'Arjun Kulkarni (Managing Director)',
+    profilePic: 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?auto=format&fit=crop&w=400&q=80',
+    avatarUrl: 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?auto=format&fit=crop&w=400&q=80',
+    specializations: ['Full Turnkey Residential', 'G+3 Independent Villas', 'Structural Retrofitting'],
+    experienceYears: 18,
+    city: 'Bengaluru',
+    completedSitesCount: 64,
+    averageRatePerSqFt: 1850,
+    verifiedLicense: true,
+    teamSize: 45,
+    recentProjects: [
+      {
+        title: 'Shubham Green Meadows Villa (Whitefield)',
+        areaSqFt: 3800,
+        completionYear: 2025,
+        budgetLakhs: 74,
+      },
+      {
+        title: 'Orchid Heights Luxury Duplex (Sarjapur)',
+        areaSqFt: 2900,
+        completionYear: 2026,
+        budgetLakhs: 58,
+      },
+    ],
+  },
+  {
+    id: 'cont_02',
+    businessName: 'Apex Pro BuildTech',
+    leadPerson: 'Naveen Reddy',
+    profilePic: 'https://images.unsplash.com/photo-1500648767791-00dcc994a43e?auto=format&fit=crop&w=400&q=80',
+    avatarUrl: 'https://images.unsplash.com/photo-1500648767791-00dcc994a43e?auto=format&fit=crop&w=400&q=80',
+    specializations: ['Commercial Interiors', 'RCC Structural Works', 'Rainwater & Foundation Works'],
+    experienceYears: 12,
+    city: 'Bengaluru',
+    completedSitesCount: 42,
+    averageRatePerSqFt: 1950,
+    verifiedLicense: true,
+    teamSize: 32,
+    recentProjects: [
+      {
+        title: 'Reddy Tech Center Commercial Floors (Electronic City)',
+        areaSqFt: 8500,
+        completionYear: 2025,
+        budgetLakhs: 165,
+      },
+    ],
+  },
+];
+
+const INITIAL_ORDERS: Order[] = [
+  {
+    id: 'ord_01',
+    orderNumber: 'BC-ORD-849201',
+    customerId: 'usr_cust_01',
+    customerName: 'Vikram Malhotra',
+    customerPhone: '+91 98201 44521',
+    shippingAddress: {
+      street: 'Site #42, Green Glen Layout, Bellandur Outer Ring Road',
+      city: 'Bengaluru',
+      state: 'Karnataka',
+      pincode: '560034',
+      landmark: 'Near Central Mall',
+    },
+    vendorId: 'usr_vend_01',
+    vendorName: 'Agarwal Cement & Steel Traders',
+    items: [
+      {
+        productId: 'mat_01',
+        productName: 'UltraTech Super Weather Plus Cement (OPC 53 Grade)',
+        brand: 'UltraTech Cement',
+        unit: 'bag',
+        quantity: 100,
+        unitPrice: 385,
+        gstRate: 28,
+        totalGst: 10780,
+        deliveryCharge: 800,
+        totalPrice: 50080,
+      },
+    ],
+    subtotal: 38500,
+    totalGst: 10780,
+    totalDelivery: 800,
+    grandTotal: 50080,
+    status: 'out_for_delivery',
+    statusHistory: [
+      { status: 'pending_confirmation', timestamp: '2026-10-31T09:30:00Z', note: 'Order placed by customer' },
+      { status: 'confirmed', timestamp: '2026-10-31T10:15:00Z', note: 'Verified by vendor inventory' },
+      { status: 'dispatched', timestamp: '2026-10-31T12:00:00Z', note: 'Loaded on Tata 407 Tipper' },
+      { status: 'out_for_delivery', timestamp: '2026-10-31T14:30:00Z', note: 'Driver Ganesh Shinde en route with 100 cement bags' },
+    ],
+    paymentMethod: 'UPI',
+    paymentStatus: 'paid',
+    paymentReference: 'UPI/20261031/982018820',
+    deliveryAgent: {
+      id: 'usr_del_01',
+      name: 'Ganesh Shinde',
+      phone: '+91 97654 32100',
+      vehicleNumber: 'KA 01 AH 5429',
+      vehicleType: 'Tata 407 Tipper (4-Tonne)',
+    },
+    deliveryOtp: '4829',
+    estimatedDeliveryDate: '2026-10-31T17:30:00Z',
+    targetMilestoneId: 'ms_02',
+    createdAt: '2026-10-31T09:30:00Z',
+    updatedAt: '2026-10-31T14:30:00Z',
+  },
+  {
+    id: 'ord_02',
+    orderNumber: 'BC-ORD-928410',
+    customerId: 'usr_cust_01',
+    customerName: 'Vikram Malhotra',
+    customerPhone: '+91 98201 44521',
+    shippingAddress: {
+      street: 'Site #42, Green Glen Layout, Bellandur Outer Ring Road',
+      city: 'Bengaluru',
+      state: 'Karnataka',
+      pincode: '560034',
+      landmark: 'Near Central Mall',
+    },
+    vendorId: 'usr_vend_01',
+    vendorName: 'Agarwal Cement & Steel Traders',
+    items: [
+      {
+        productId: 'mat_02',
+        productName: 'Tata Tiscon 550D High Ductility Fe-550 TMT Rebar (12mm)',
+        brand: 'Tata Tiscon',
+        unit: 'tonne',
+        quantity: 5,
+        unitPrice: 64500,
+        gstRate: 18,
+        totalGst: 58050,
+        deliveryCharge: 2500,
+        totalPrice: 383050,
+      },
+    ],
+    subtotal: 322500,
+    totalGst: 58050,
+    totalDelivery: 2500,
+    grandTotal: 383050,
+    status: 'dispatched',
+    statusHistory: [
+      { status: 'pending_confirmation', timestamp: '2026-10-30T11:00:00Z', note: 'Order placed by customer' },
+      { status: 'confirmed', timestamp: '2026-10-30T13:20:00Z', note: 'Steel weighbridge certified at stockyard' },
+      { status: 'dispatched', timestamp: '2026-10-31T06:00:00Z', note: 'Heavy logistics transit initiated' },
+    ],
+    paymentMethod: 'NET_BANKING',
+    paymentStatus: 'paid',
+    paymentReference: 'NEFT/HDFC/20261030/118942',
+    deliveryAgent: {
+      id: 'usr_del_02',
+      name: 'Manjunath Gowda',
+      phone: '+91 98440 22199',
+      vehicleNumber: 'KA 05 MN 8820',
+      vehicleType: '16-Ton Multi-Axle Heavy Carrier',
+    },
+    deliveryOtp: '7319',
+    estimatedDeliveryDate: '2026-11-01T14:00:00Z',
+    targetMilestoneId: 'ms_02',
+    createdAt: '2026-10-30T11:00:00Z',
+    updatedAt: '2026-10-31T06:00:00Z',
+  },
+  {
+    id: 'ord_03',
+    orderNumber: 'BC-ORD-774921',
+    customerId: 'usr_cust_01',
+    customerName: 'Vikram Malhotra',
+    customerPhone: '+91 98201 44521',
+    shippingAddress: {
+      street: 'Site #42, Green Glen Layout, Bellandur Outer Ring Road',
+      city: 'Bengaluru',
+      state: 'Karnataka',
+      pincode: '560034',
+      landmark: 'Near Central Mall',
+    },
+    vendorId: 'usr_vend_02',
+    vendorName: 'Patil Building Solutions & Concrete',
+    items: [
+      {
+        productId: 'mat_03',
+        productName: 'Birla Aerocon High-Strength Autoclaved Aerated Concrete (AAC) Blocks',
+        brand: 'Birla Aerocon',
+        unit: 'piece',
+        quantity: 1200,
+        unitPrice: 62,
+        gstRate: 18,
+        totalGst: 13392,
+        deliveryCharge: 1800,
+        totalPrice: 89592,
+      },
+      {
+        productId: 'mat_04',
+        productName: 'Triple-Washed Robo Manufactured Sand (M-Sand) for Plastering',
+        brand: 'RoboSilicon',
+        unit: 'brass',
+        quantity: 2,
+        unitPrice: 4200,
+        gstRate: 5,
+        totalGst: 420,
+        deliveryCharge: 1200,
+        totalPrice: 10020,
+      },
+    ],
+    subtotal: 82800,
+    totalGst: 13812,
+    totalDelivery: 3000,
+    grandTotal: 99612,
+    status: 'confirmed',
+    statusHistory: [
+      { status: 'pending_confirmation', timestamp: '2026-10-31T07:15:00Z', note: 'Advance booking for masonry phase' },
+      { status: 'confirmed', timestamp: '2026-10-31T08:00:00Z', note: 'Scheduled batch allocated for kiln dispatch' },
+    ],
+    paymentMethod: 'UPI',
+    paymentStatus: 'paid',
+    paymentReference: 'UPI/20261031/774921001',
+    deliveryOtp: '8192',
+    estimatedDeliveryDate: '2026-11-04T11:00:00Z',
+    targetMilestoneId: 'ms_03',
+    createdAt: '2026-10-31T07:15:00Z',
+    updatedAt: '2026-10-31T08:00:00Z',
+  },
+  {
+    id: 'ord_04',
+    orderNumber: 'BC-ORD-651033',
+    customerId: 'usr_cust_01',
+    customerName: 'Vikram Malhotra',
+    customerPhone: '+91 98201 44521',
+    shippingAddress: {
+      street: 'Site #42, Green Glen Layout, Bellandur Outer Ring Road',
+      city: 'Bengaluru',
+      state: 'Karnataka',
+      pincode: '560034',
+      landmark: 'Near Central Mall',
+    },
+    vendorId: 'usr_vend_01',
+    vendorName: 'Agarwal Cement & Steel Traders',
+    items: [
+      {
+        productId: 'mat_05',
+        productName: 'Dr. Fixit 101 LW+ Integral Liquid Waterproofing Compound',
+        brand: 'Dr. Fixit',
+        unit: 'litre',
+        quantity: 50,
+        unitPrice: 148,
+        gstRate: 18,
+        totalGst: 1332,
+        deliveryCharge: 400,
+        totalPrice: 9132,
+      },
+    ],
+    subtotal: 7400,
+    totalGst: 1332,
+    totalDelivery: 400,
+    grandTotal: 9132,
+    status: 'pending_confirmation',
+    statusHistory: [
+      { status: 'pending_confirmation', timestamp: '2026-10-31T09:00:00Z', note: 'Order placed for waterproofing compound' },
+    ],
+    paymentMethod: 'CARD',
+    paymentStatus: 'paid',
+    paymentReference: 'CARD/VISA/20261031/651033',
+    deliveryOtp: '3341',
+    estimatedDeliveryDate: '2026-11-12T10:00:00Z',
+    targetMilestoneId: 'ms_06',
+    createdAt: '2026-10-31T09:00:00Z',
+    updatedAt: '2026-10-31T09:00:00Z',
+  },
+];
+
+const INITIAL_DELIVERY_AGENTS: DeliveryAgentProfile[] = [
+  {
+    id: 'agent_01',
+    userId: 'usr_del_01',
+    name: 'Ganesh Shinde',
+    phone: '+91 97654 32100',
+    verificationStatus: 'approved',
+    vehicleType: 'Tata 407 Tipper (4-Tonne)',
+    vehicleNumber: 'KA 01 AH 5429',
+    maxWeightCapacityKg: 4000,
+    maxVolumeCubicMeters: 6.5,
+    serviceCity: 'Bengaluru',
+    serviceRadiusKm: 50,
+    isAvailable: true,
+    totalTripsCompleted: 148,
+    rating: 4.9,
+  },
+  {
+    id: 'agent_02',
+    userId: 'usr_del_02',
+    name: 'Manjunath Gowda',
+    phone: '+91 98440 22199',
+    verificationStatus: 'approved',
+    vehicleType: 'Ashok Leyland 16-Tonne Multi-Axle',
+    vehicleNumber: 'KA 05 MN 8820',
+    maxWeightCapacityKg: 16000,
+    maxVolumeCubicMeters: 22,
+    serviceCity: 'Bengaluru',
+    serviceRadiusKm: 80,
+    isAvailable: true,
+    totalTripsCompleted: 92,
+    rating: 4.8,
+  },
+];
+
+export const DEFAULT_PROJECT_MILESTONES: ConstructionMilestone[] = [
+  {
+    id: 'ms_01',
+    phaseOrder: 1,
+    title: 'Site Preparation, Soil Testing & Excavation',
+    category: 'Foundation & Substructure',
+    description: 'Demarcation, IEI geotechnical soil bearing capacity test, anti-termite treatment, and mechanical trench excavation to bedrock.',
+    startDate: '2026-10-10',
+    targetEndDate: '2026-10-20',
+    actualEndDate: '2026-10-19',
+    status: 'completed',
+    progressPercent: 100,
+    estimatedBudget: 350000,
+    spentAmount: 345000,
+    leadContractor: 'Kulkarni Infra & Turnkey Constructions',
+    tasks: [
+      { id: 't_01_1', title: 'Plot boundaries GPS survey & municipal benchmark datum', completed: true, completedAt: '2026-10-10', assignedRole: 'Quantity Surveyor' },
+      { id: 't_01_2', title: 'Geotechnical soil investigation report (SBC 180 kN/m² certified)', completed: true, completedAt: '2026-10-12', assignedRole: 'Structural Engineer', isMandatoryInspection: true },
+      { id: 't_01_3', title: 'Earth excavation up to 8.5ft depth with JCB 3DX & shoring', completed: true, completedAt: '2026-10-16', assignedRole: 'Contractor Crew' },
+      { id: 't_01_4', title: 'Chlorpyrifos chemical anti-termite emulsion injection barrier', completed: true, completedAt: '2026-10-18', assignedRole: 'Pest Specialist' },
+      { id: 't_01_5', title: 'PCC 1:4:8 leveling base concrete poured & cured for 72 hrs', completed: true, completedAt: '2026-10-19', assignedRole: 'Masonry Team', isMandatoryInspection: true },
+    ],
+    orderIds: [],
+    materials: [
+      { productName: 'PCC Cement & Coarse Aggregates', category: 'Cement', quantityRequired: '60 Bags & 4 Brass', expectedDeliveryDate: '2026-10-15', deliveryStatus: 'delivered', carrierVehicle: 'Tata 407 Tipper' },
+    ],
+    inspectionNotes: 'Soil bearing test certified by Er. Rajesh Sharma. Anti-termite guarantee card issued for 10 years.',
+  },
+  {
+    id: 'ms_02',
+    phaseOrder: 2,
+    title: 'Isolated Footings & Plinth Column Framing (G+2)',
+    category: 'Foundation & Substructure',
+    description: 'Fabricating heavy Fe-550 rebar cages, pouring M25 structural concrete footings, and plinth beam tie-ins up to ground level.',
+    startDate: '2026-10-21',
+    targetEndDate: '2026-11-03',
+    status: 'in_progress',
+    progressPercent: 75,
+    estimatedBudget: 820000,
+    spentAmount: 433130,
+    leadContractor: 'Kulkarni Infra & Turnkey Constructions',
+    tasks: [
+      { id: 't_02_1', title: 'Tata Tiscon 550D rebar cutting & bending according to BBS schedule', completed: true, completedAt: '2026-10-24', assignedRole: 'Bar Bender (Steel Fixer)' },
+      { id: 't_02_2', title: '16 isolated column stub shuttering alignment & plumb check', completed: true, completedAt: '2026-10-27', assignedRole: 'Shuttering Carpenter' },
+      { id: 't_02_3', title: 'M25 grade ready-mix concrete batch pour for all footings', completed: true, completedAt: '2026-10-29', assignedRole: 'Civil Contractor', isMandatoryInspection: true },
+      { id: 't_02_4', title: 'UltraTech OPC 53 cement dispatch & site staging check', completed: false, assignedRole: 'Site Supervisor' },
+      { id: 't_02_5', title: 'Rebound hammer non-destructive compressive strength audit', completed: false, assignedRole: 'Structural Engineer', isMandatoryInspection: true },
+    ],
+    orderIds: ['ord_01', 'ord_02'],
+    materials: [
+      { orderId: 'ord_01', productName: 'UltraTech Super Weather Plus Cement (OPC 53 Grade)', category: 'Cement', quantityRequired: '100 Bags', expectedDeliveryDate: '2026-10-31T17:30:00Z', deliveryStatus: 'in_transit', deliveryOtp: '4829', carrierVehicle: 'Tata 407 Tipper (KA 01 AH 5429)' },
+      { orderId: 'ord_02', productName: 'Tata Tiscon 550D High Ductility Fe-550 TMT Rebar (12mm)', category: 'TMT Steel', quantityRequired: '5 Tonnes', expectedDeliveryDate: '2026-11-01T14:00:00Z', deliveryStatus: 'in_transit', deliveryOtp: '7319', carrierVehicle: '16-Ton Multi-Axle (KA 05 MN 8820)' },
+    ],
+    inspectionNotes: 'All 16 column footing center-lines verified with total station. Delivery OTP 4829 shared with site engineer.',
+  },
+  {
+    id: 'ms_03',
+    phaseOrder: 3,
+    title: 'Ground Floor AAC Block Masonry & Lintel Casting',
+    category: 'Masonry & Enclosure',
+    description: 'Constructing thermal insulated perimeter walls, internal room partitions, damp-proof course, and precast window lintels.',
+    startDate: '2026-11-04',
+    targetEndDate: '2026-11-20',
+    status: 'upcoming',
+    progressPercent: 15,
+    estimatedBudget: 650000,
+    spentAmount: 99612,
+    leadContractor: 'Kulkarni Infra & Turnkey Constructions',
+    tasks: [
+      { id: 't_03_1', title: 'Damp Proof Course (DPC) 50mm polymer bitumen membrane laying', completed: false, assignedRole: 'Mason (Rajmistri)' },
+      { id: 't_03_2', title: 'First course block alignment with laser leveling tool', completed: false, assignedRole: 'Mason (Rajmistri)' },
+      { id: 't_03_3', title: 'Birla Aerocon block walling with polymer thin-set joint mortar', completed: false, assignedRole: 'Masonry Crew' },
+      { id: 't_03_4', title: 'Precast RCC lintel beams & chajja sunshades installation', completed: false, assignedRole: 'Civil Contractor', isMandatoryInspection: true },
+    ],
+    orderIds: ['ord_03'],
+    materials: [
+      { orderId: 'ord_03', productName: 'Birla Aerocon AAC Blocks & Robo Plaster Sand', category: 'Bricks & Blocks', quantityRequired: '1200 Blocks & 2 Brass M-Sand', expectedDeliveryDate: '2026-11-04T11:00:00Z', deliveryStatus: 'scheduled', deliveryOtp: '8192', carrierVehicle: 'Eicher 10.90 Flatbed' },
+    ],
+  },
+  {
+    id: 'ms_04',
+    phaseOrder: 4,
+    title: 'First Floor Suspended Slab Casting & Curing',
+    category: 'Superstructure & Framing',
+    description: 'High-density waterproof plywood shuttering, two-way slab rebar distribution mesh, electrical fan box insertion, and pump casting.',
+    startDate: '2026-11-21',
+    targetEndDate: '2026-12-05',
+    status: 'upcoming',
+    progressPercent: 0,
+    estimatedBudget: 980000,
+    spentAmount: 0,
+    leadContractor: 'Kulkarni Infra',
+    tasks: [
+      { id: 't_04_1', title: 'Acro span props & marine ply staging with zero deflection tolerance', completed: false, assignedRole: 'Shuttering Carpenter' },
+      { id: 't_04_2', title: 'Top & bottom reinforcement steel mesh tying with 20mm cover blocks', completed: false, assignedRole: 'Bar Bender (Steel Fixer)' },
+      { id: 't_04_3', title: 'Concealed fan box & electrical conduit embedment before pour', completed: false, assignedRole: 'Electrician' },
+      { id: 't_04_4', title: 'Structural Engineer pre-pour certificate (Mandatory Sign-off)', completed: false, assignedRole: 'Structural Engineer', isMandatoryInspection: true },
+      { id: 't_04_5', title: 'M25 high-workability concrete pump pour with needle vibrators', completed: false, assignedRole: 'RMC Provider' },
+    ],
+    orderIds: [],
+    materials: [
+      { productName: 'RMC Concrete (M25 Grade) & Cover Blocks', category: 'Ready-Mix Concrete', quantityRequired: '32 Cubic Meters', expectedDeliveryDate: '2026-11-28', deliveryStatus: 'pending_procurement' },
+    ],
+  },
+  {
+    id: 'ms_05',
+    phaseOrder: 5,
+    title: 'Concealed MEP (Plumbing, Electrical & HVAC)',
+    category: 'MEP & Services',
+    description: 'Chasing brickwork for concealed conduit wiring, sound-deadened drainage risers, hot/cold CPVC water lines, and solar water heater lines.',
+    startDate: '2026-12-06',
+    targetEndDate: '2026-12-22',
+    status: 'upcoming',
+    progressPercent: 0,
+    estimatedBudget: 540000,
+    spentAmount: 0,
+    leadContractor: 'Apex Pro BuildTech',
+    tasks: [
+      { id: 't_05_1', title: 'Wall chasing & FRLS heavy-duty PVC electrical conduits', completed: false, assignedRole: 'Electrician' },
+      { id: 't_05_2', title: 'SDR 11 CPVC plumbing lines pressure tested at 10 kg/cm² for 24h', completed: false, assignedRole: 'Plumber', isMandatoryInspection: true },
+      { id: 't_05_3', title: 'Dual-pipe rainwater harvesting & greywater segregation loops', completed: false, assignedRole: 'Plumber' },
+      { id: 't_05_4', title: 'Dedicated earthing pit electrode installation with resistance test', completed: false, assignedRole: 'Electrical Consultant' },
+    ],
+    orderIds: [],
+    materials: [
+      { productName: 'Astral CPVC Pipes & Finolex FRLS Conduit Cables', category: 'Plumbing', quantityRequired: 'Lot of 150m Pipes & 12 Coils', expectedDeliveryDate: '2026-12-08', deliveryStatus: 'pending_procurement' },
+    ],
+  },
+  {
+    id: 'ms_06',
+    phaseOrder: 6,
+    title: 'Internal & External Plastering / Terrace Waterproofing',
+    category: 'Masonry & Enclosure',
+    description: 'Plaster mesh fixing at beam-column junctions, double-coat smooth sand-faced plastering, and elastomeric terrace waterproofing.',
+    startDate: '2026-12-23',
+    targetEndDate: '2027-01-10',
+    status: 'upcoming',
+    progressPercent: 0,
+    estimatedBudget: 490000,
+    spentAmount: 9132,
+    leadContractor: 'Kulkarni Infra',
+    tasks: [
+      { id: 't_06_1', title: 'Galvanized chicken mesh fixing on all brick-concrete junctions', completed: false, assignedRole: 'Masonry Team' },
+      { id: 't_06_2', title: 'Internal sand plastering with plumb line accuracy within 3mm', completed: false, assignedRole: 'Mason (Rajmistri)' },
+      { id: 't_06_3', title: 'Dr. Fixit 101 LW+ integral waterproofer mixed in mortar coat', completed: false, assignedRole: 'Waterproofing Specialist' },
+      { id: 't_06_4', title: 'Terrace 72-hour standing water ponding leak test sign-off', completed: false, assignedRole: 'Structural Auditor', isMandatoryInspection: true },
+    ],
+    orderIds: ['ord_04'],
+    materials: [
+      { orderId: 'ord_04', productName: 'Dr. Fixit 101 LW+ Integral Liquid Waterproofing Compound', category: 'Waterproofing', quantityRequired: '50 Litres', expectedDeliveryDate: '2026-11-12T10:00:00Z', deliveryStatus: 'scheduled', deliveryOtp: '3341', carrierVehicle: 'Parcel Logistics Van' },
+    ],
+  },
+  {
+    id: 'ms_07',
+    phaseOrder: 7,
+    title: 'Vitrified Flooring, Wall Tiles & Teak Joinery',
+    category: 'Finishes & Interior',
+    description: 'Zero-level screed bed laying, large-format anti-skid floor tiles, designer bathroom dado tiles, and solid wood door frames.',
+    startDate: '2027-01-11',
+    targetEndDate: '2027-01-28',
+    status: 'upcoming',
+    progressPercent: 0,
+    estimatedBudget: 720000,
+    spentAmount: 0,
+    leadContractor: 'Kulkarni Infra',
+    tasks: [
+      { id: 't_07_1', title: 'Floor level datum survey across all rooms with 1:100 slope to drains', completed: false, assignedRole: 'Tile Mason' },
+      { id: 't_07_2', title: 'Kajaria Vitrified tiles laying with 2mm spacers & epoxy grout', completed: false, assignedRole: 'Tile Mason' },
+      { id: 't_07_3', title: 'Teak wood door frames fitting with moisture barrier silicone seal', completed: false, assignedRole: 'Carpenter' },
+      { id: 't_07_4', title: 'Granite counter top polish and washbasin undermounting', completed: false, assignedRole: 'Finishing Crew' },
+    ],
+    orderIds: [],
+    materials: [
+      { productName: 'Kajaria 600x1200mm Glazed Vitrified Tiles & Epoxy Grout', category: 'Tiles & Flooring', quantityRequired: '1800 Sq.ft & 8 Tubs', expectedDeliveryDate: '2027-01-12', deliveryStatus: 'pending_procurement' },
+    ],
+  },
+  {
+    id: 'ms_08',
+    phaseOrder: 8,
+    title: 'Premium Emulsion Painting, Fixtures & Handover',
+    category: 'Handover & Audit',
+    description: 'Acrylic wall putty base, Asian Paints Royale luxury emulsion, sanitary fitting fixtures, 45-point quality audit, and key handover.',
+    startDate: '2027-01-29',
+    targetEndDate: '2027-02-15',
+    status: 'upcoming',
+    progressPercent: 0,
+    estimatedBudget: 450000,
+    spentAmount: 0,
+    leadContractor: 'Kulkarni Infra & Turnkey Constructions',
+    tasks: [
+      { id: 't_08_1', title: 'Double coat acrylic wall putty with orbital machine sanding', completed: false, assignedRole: 'Painter' },
+      { id: 't_08_2', title: 'Two coats Asian Paints Royale luxury emulsion finish', completed: false, assignedRole: 'Painter' },
+      { id: 't_08_3', title: 'Kohler brass sanitary fittings & Schneider modular switch plates', completed: false, assignedRole: 'Plumber & Electrician' },
+      { id: 't_08_4', title: 'Comprehensive 45-point pre-delivery snag list inspection', completed: false, assignedRole: 'Civil Engineer', isMandatoryInspection: true },
+      { id: 't_08_5', title: 'Final deep cleaning, digital warranty passbook, and key handover', completed: false, assignedRole: 'Managing Director' },
+    ],
+    orderIds: [],
+    materials: [
+      { productName: 'Asian Paints Royale Luxury Emulsion & Primer', category: 'Paints & Coatings', quantityRequired: '80 Litres & 40 Litres Primer', expectedDeliveryDate: '2027-01-30', deliveryStatus: 'pending_procurement' },
+    ],
+  },
+];
+
+const INITIAL_PROJECTS: CustomerProject[] = [
+  {
+    id: 'proj_01',
+    customerId: 'usr_cust_01',
+    title: 'Green Glen Independent Villa (G+2)',
+    projectType: 'residential_villa',
+    siteAddress: 'Plot #42, Green Glen Layout, Bellandur, Bengaluru',
+    sitePincode: '560034',
+    targetBudget: 7500000,
+    spentSoFar: 541824,
+    status: 'in_progress',
+    orderIds: ['ord_01', 'ord_02', 'ord_03', 'ord_04'],
+    bookingIds: ['bk_pro_01'],
+    quotationIds: ['quot_01'],
+    estimatedCompletionDate: '2027-02-15',
+    milestones: DEFAULT_PROJECT_MILESTONES,
+    createdAt: '2026-10-20T10:00:00Z',
+  },
+];
+
+const INITIAL_ADDRESSES: SavedAddress[] = [
+  {
+    id: 'addr_01',
+    userId: 'usr_cust_01',
+    label: 'Primary Construction Site',
+    street: 'Plot #42, Green Glen Layout, Outer Ring Road, Bellandur',
+    city: 'Bengaluru',
+    state: 'Karnataka',
+    pincode: '560034',
+    landmark: 'Opposite Shell Petrol Bunk',
+    isDefault: true,
+  },
+  {
+    id: 'addr_02',
+    userId: 'usr_cust_01',
+    label: 'Site Office',
+    street: 'Suite 401, Salarpuria Hallmark, Outer Ring Road',
+    city: 'Bengaluru',
+    state: 'Karnataka',
+    pincode: '560103',
+    landmark: 'Near Kadubeesanahalli Bridge',
+    isDefault: false,
+  },
+];
+
+const INITIAL_SETTINGS: PlatformSettings = {
+  platformName: 'BuildNiva',
+  defaultCurrency: 'INR',
+  baseCommissionPercent: 3.5,
+  gatewayFeePercent: 1.8,
+  supportPhone: '1800-425-9900',
+  supportEmail: 'support@buildniva.in',
+  serviceableCities: ['Bengaluru', 'Mumbai', 'Delhi NCR', 'Hyderabad', 'Pune', 'Chennai'],
+  maintenanceMode: false,
+};
+
+const INITIAL_NOTIFICATIONS: AppNotification[] = [
+  {
+    id: 'notif_01',
+    userId: 'usr_cust_01',
+    title: 'Consignment Out for Delivery',
+    message: 'Driver Ganesh Shinde is en route on Tata 407 (KA 01 AH 5429). Keep OTP 4829 ready for unloading.',
+    type: 'delivery',
+    read: false,
+    linkTab: 'orders',
+    referenceId: 'ord_01',
+    createdAt: '2026-10-26T20:15:00Z',
+  },
+  {
+    id: 'notif_02',
+    userId: 'usr_cust_01',
+    title: 'Structural Inspection Confirmed',
+    message: 'Er. Rajesh Sharma confirmed site visit for tomorrow at 11:00 AM.',
+    type: 'booking',
+    read: true,
+    linkTab: 'professionals',
+    createdAt: '2026-10-26T15:00:00Z',
+  },
+];
+
+const INITIAL_PROFESSIONAL_BOOKINGS: ProfessionalBooking[] = [
+  {
+    id: 'bk_pro_seed_01',
+    bookingNumber: 'BC-PRO-849201',
+    professionalId: 'pro_01',
+    professionalName: 'Er. Rajesh Sharma, M.Tech (Structures)',
+    customerId: 'usr_cust_01',
+    customerName: 'Vikram Malhotra',
+    customerPhone: '+91 98201 44521',
+    customerEmail: 'vikram.customer@buildconnect.in',
+    customerCity: 'Bengaluru',
+    serviceType: 'structural_drawings',
+    inquiryType: 'deliverable_order',
+    urgency: 'Standard',
+    date: '2026-03-02',
+    timeSlot: '11:00 AM - 12:00 PM',
+    siteLocation: 'Plot #84, HSR Layout Sector 2, Bengaluru',
+    projectDescription: 'Full STAAD Pro analysis & RCC column-beam framing drawings for G+3 residential villa on 30x50 plot.',
+    fee: 12500,
+    status: 'in_progress',
+    engineerNotes: 'Architectural floor plan received. Column placement grid underway. Slab thickness fixed at 150mm.',
+    createdAt: '2026-02-28T09:30:00Z',
+  },
+  {
+    id: 'bk_pro_seed_02',
+    bookingNumber: 'BC-PRO-723145',
+    professionalId: 'pro_01',
+    professionalName: 'Er. Rajesh Sharma, M.Tech (Structures)',
+    customerId: 'usr_cust_02',
+    customerName: 'Ananya Deshmukh',
+    customerPhone: '+91 98450 67210',
+    customerEmail: 'ananya.builder@gmail.com',
+    customerCity: 'Bengaluru',
+    serviceType: 'site_audits',
+    inquiryType: 'direct_inquiry',
+    urgency: 'Urgent (Within 48h)',
+    date: '2026-03-04',
+    timeSlot: '03:00 PM - 04:00 PM',
+    siteLocation: 'Site 12, Whitefield Main Road, Bengaluru',
+    projectDescription: 'Pre-pour structural rebar inspection and tie-bar lap lengths audit for first floor transfer slab before pouring M25 RMC.',
+    fee: 4500,
+    status: 'scheduled',
+    engineerNotes: 'Inspection kit and rebound hammer ready. Requested bar bending schedule sheet in advance.',
+    createdAt: '2026-03-01T14:15:00Z',
+  },
+  {
+    id: 'bk_pro_seed_03',
+    bookingNumber: 'BC-PRO-918234',
+    professionalId: 'pro_01',
+    professionalName: 'Er. Rajesh Sharma, M.Tech (Structures)',
+    customerId: 'usr_cust_03',
+    customerName: 'Rohan Kulkarni',
+    customerPhone: '+91 97410 88921',
+    customerEmail: 'rohan.infra@outlook.com',
+    customerCity: 'Bengaluru',
+    serviceType: '3d_architectural_plans',
+    inquiryType: 'direct_inquiry',
+    urgency: 'Standard',
+    date: '2026-03-05',
+    timeSlot: '10:00 AM - 11:00 AM',
+    siteLocation: 'Survey 44, Electronic City Phase 1, Bengaluru',
+    projectDescription: 'Requesting 3D BIM exterior facade rendering, louvre placement, and material elevation mood board for 4BHK duplex villa.',
+    fee: 18000,
+    status: 'scheduled',
+    engineerNotes: 'Customer sent reference photos of biophilic elevation. Concept sketch in progress.',
+    createdAt: '2026-03-01T16:45:00Z',
+  },
+  {
+    id: 'bk_pro_seed_04',
+    bookingNumber: 'BC-PRO-635190',
+    professionalId: 'pro_01',
+    professionalName: 'Er. Rajesh Sharma, M.Tech (Structures)',
+    customerId: 'usr_cust_04',
+    customerName: 'Dr. Arvind Rao',
+    customerPhone: '+91 98800 23419',
+    customerEmail: 'arvind.rao@hospitalgroup.in',
+    customerCity: 'Mysuru',
+    serviceType: 'mep_designs',
+    inquiryType: 'deliverable_order',
+    urgency: 'Standard',
+    date: '2026-02-25',
+    timeSlot: '05:00 PM - 06:00 PM',
+    siteLocation: 'Plot 19, Gokulam 3rd Stage, Mysuru',
+    projectDescription: 'Sanitary plumbing riser schematics, solar heating conduits, and rainwater harvesting recharge pit sizing.',
+    fee: 9500,
+    status: 'completed',
+    engineerNotes: 'Delivered finalized AutoCAD MEP drawing set and hydraulic pressure calculations sheet.',
+    createdAt: '2026-02-22T11:00:00Z',
+  },
+  {
+    id: 'bk_pro_seed_05',
+    bookingNumber: 'BC-PRO-512098',
+    professionalId: 'pro_01',
+    professionalName: 'Er. Rajesh Sharma, M.Tech (Structures)',
+    customerId: 'usr_cust_05',
+    customerName: 'Meera Nambiar',
+    customerPhone: '+91 99001 77623',
+    customerEmail: 'meera.nambiar@gmail.com',
+    customerCity: 'Bengaluru',
+    serviceType: 'online_consultation',
+    inquiryType: 'consultation_booking',
+    urgency: 'Standard',
+    date: '2026-03-03',
+    timeSlot: '11:30 AM - 12:30 PM',
+    siteLocation: 'Koramangala 4th Block, Bengaluru',
+    projectDescription: 'Query regarding removing a ground-floor load-bearing wall to create open-plan living room. Need stability opinion.',
+    fee: 1499,
+    status: 'scheduled',
+    meetingLink: 'https://meet.google.com/bld-cnct-eng',
+    createdAt: '2026-03-01T18:00:00Z',
+  },
+];
+
+class Database {
+  private data: DatabaseSchema;
+
+  constructor() {
+    this.data = this.loadData();
+  }
+
+  private loadData(): DatabaseSchema {
+    try {
+      if (fs.existsSync(DB_FILE)) {
+        const fileContent = fs.readFileSync(DB_FILE, 'utf-8');
+        const parsed = JSON.parse(fileContent);
+        // Guarantee all collection arrays exist
+        parsed.projects = parsed.projects || INITIAL_PROJECTS;
+        parsed.addresses = parsed.addresses || INITIAL_ADDRESSES;
+        parsed.payments = parsed.payments || [];
+        parsed.financialLedger = parsed.financialLedger || [];
+        parsed.vendorSettlements = parsed.vendorSettlements || [];
+        parsed.deliveryAgents = parsed.deliveryAgents || INITIAL_DELIVERY_AGENTS;
+        parsed.priceAlerts = parsed.priceAlerts || [];
+        parsed.sessions = parsed.sessions || [];
+        if (!parsed.professionalBookings || parsed.professionalBookings.length === 0) {
+          parsed.professionalBookings = [...INITIAL_PROFESSIONAL_BOOKINGS];
+        }
+        // Ensure professionals have avatarUrl, portfolioProjects, and specialized services populated
+        if (parsed.professionals) {
+          const defaultAvatars = [
+            'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?auto=format&fit=crop&w=400&q=80',
+            'https://images.unsplash.com/photo-1573496359142-b8d87734a5a2?auto=format&fit=crop&w=400&q=80',
+            'https://images.unsplash.com/photo-1500648767791-00dcc994a43e?auto=format&fit=crop&w=400&q=80',
+          ];
+          parsed.professionals.forEach((p: any, idx: number) => {
+            if (!p.avatarUrl) {
+              p.avatarUrl = defaultAvatars[idx % defaultAvatars.length];
+              p.profilePic = p.avatarUrl;
+            }
+            const matchingInitial = INITIAL_PROFESSIONALS.find((init) => init.id === p.id);
+            if (matchingInitial) {
+              if (!p.portfolioProjects || p.portfolioProjects.length === 0) {
+                p.portfolioProjects = [...(matchingInitial.portfolioProjects || [])];
+              }
+              if (!p.servicesOffered || p.servicesOffered.length === 0) {
+                p.servicesOffered = [...(matchingInitial.servicesOffered || [])];
+              }
+              p.structuralDrawingsRate = p.structuralDrawingsRate || matchingInitial.structuralDrawingsRate;
+              p.architecturalPlansRate = p.architecturalPlansRate || matchingInitial.architecturalPlansRate;
+              p.mepDesignsRate = p.mepDesignsRate || matchingInitial.mepDesignsRate;
+              p.siteAuditsRate = p.siteAuditsRate || matchingInitial.siteAuditsRate;
+            }
+          });
+        }
+        if (parsed.users) {
+          const proUser = parsed.users.find((u: any) => u.role === 'professional');
+          if (proUser && !proUser.avatar) {
+            proUser.avatar = 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?auto=format&fit=crop&w=400&q=80';
+          }
+        }
+        // Ensure bag-based materials start count from 2 bags
+        if (parsed.materials) {
+          parsed.materials.forEach((m: any) => {
+            if (m.unit === 'bag' && (m.minOrderQty > 2 || !m.minOrderQty)) {
+              m.minOrderQty = 2;
+            }
+          });
+        }
+        // Ensure labourers have photoUrl and workPhotos populated
+        if (parsed.labourers) {
+          parsed.labourers.forEach((lab: any) => {
+            const matchingInitial = INITIAL_LABOUR.find((init) => init.id === lab.id);
+            if (matchingInitial) {
+              if (!lab.photoUrl) lab.photoUrl = matchingInitial.photoUrl;
+              if (!lab.workPhotos || lab.workPhotos.length === 0) {
+                lab.workPhotos = [...(matchingInitial.workPhotos || [])];
+              }
+            }
+          });
+        }
+        // Ensure contractors have profilePic and avatarUrl populated
+        if (parsed.contractors) {
+          parsed.contractors.forEach((c: any) => {
+            const matchingInitial = INITIAL_CONTRACTORS.find((init) => init.id === c.id);
+            if (matchingInitial) {
+              if (!c.profilePic) c.profilePic = matchingInitial.profilePic;
+              if (!c.avatarUrl) c.avatarUrl = matchingInitial.avatarUrl;
+            } else if (!c.profilePic) {
+              c.profilePic = 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?auto=format&fit=crop&w=400&q=80';
+              c.avatarUrl = c.profilePic;
+            }
+          });
+        }
+        // Ensure projects have construction milestones and estimated completion date
+        if (parsed.projects) {
+          const villaProj = parsed.projects.find((p: any) => p.id === 'proj_01');
+          if (villaProj) {
+            if (!villaProj.milestones || villaProj.milestones.length === 0) {
+              villaProj.milestones = JSON.parse(JSON.stringify(DEFAULT_PROJECT_MILESTONES));
+            }
+            if (!villaProj.estimatedCompletionDate) {
+              villaProj.estimatedCompletionDate = '2027-02-15';
+            }
+            villaProj.orderIds = ['ord_01', 'ord_02', 'ord_03', 'ord_04'];
+            villaProj.spentSoFar = 541824;
+          }
+          parsed.projects.forEach((p: any) => {
+            if (!p.milestones || p.milestones.length === 0) {
+              p.milestones = JSON.parse(JSON.stringify(DEFAULT_PROJECT_MILESTONES));
+            }
+            if (!p.estimatedCompletionDate) {
+              p.estimatedCompletionDate = '2027-02-15';
+            }
+          });
+        }
+        // Ensure orders include all staged construction orders with estimated delivery dates
+        if (parsed.orders) {
+          INITIAL_ORDERS.forEach((initOrder) => {
+            const existingIdx = parsed.orders.findIndex((o: any) => o.id === initOrder.id);
+            if (existingIdx === -1) {
+              parsed.orders.push(initOrder);
+            } else {
+              if (!parsed.orders[existingIdx].estimatedDeliveryDate) {
+                parsed.orders[existingIdx].estimatedDeliveryDate = initOrder.estimatedDeliveryDate;
+              }
+              if (!parsed.orders[existingIdx].targetMilestoneId) {
+                parsed.orders[existingIdx].targetMilestoneId = initOrder.targetMilestoneId;
+              }
+            }
+          });
+        }
+        return parsed;
+      }
+    } catch (err) {
+      console.warn('Could not read existing database file, seeding fresh records:', err);
+    }
+
+    const defaultData: DatabaseSchema = {
+      users: INITIAL_USERS,
+      sessions: [],
+      materials: INITIAL_MATERIALS,
+      equipment: INITIAL_EQUIPMENT,
+      professionals: INITIAL_PROFESSIONALS,
+      labourers: INITIAL_LABOUR,
+      contractors: INITIAL_CONTRACTORS,
+      orders: INITIAL_ORDERS,
+      equipmentBookings: [],
+      professionalBookings: INITIAL_PROFESSIONAL_BOOKINGS,
+      labourRequests: [],
+      contractorQuotations: [],
+      projects: INITIAL_PROJECTS,
+      addresses: INITIAL_ADDRESSES,
+      payments: [
+        {
+          id: 'pay_01',
+          orderId: 'ord_01',
+          paymentMethod: 'UPI',
+          amount: 50080,
+          currency: 'INR',
+          status: 'paid',
+          gatewayTransactionId: 'UPI/20261026/982018820',
+          signatureVerified: true,
+          isDevelopmentMode: true,
+          createdAt: '2026-10-26T14:30:00Z',
+          updatedAt: '2026-10-26T14:30:00Z',
+        },
+      ],
+      financialLedger: [
+        {
+          id: 'ledg_01',
+          transactionRef: 'TXN-849201-01',
+          orderId: 'ord_01',
+          entryType: 'ORDER_PAYMENT',
+          amount: 50080,
+          debitAccount: 'CUSTOMER_ESCROW',
+          creditAccount: 'MARKETPLACE_CLEARING',
+          description: 'Gross Order Payment for BC-ORD-849201',
+          createdAt: '2026-10-26T14:30:00Z',
+        },
+        {
+          id: 'ledg_02',
+          transactionRef: 'TXN-849201-02',
+          orderId: 'ord_01',
+          entryType: 'PLATFORM_COMMISSION',
+          amount: 1752.8,
+          debitAccount: 'MARKETPLACE_CLEARING',
+          creditAccount: 'PLATFORM_REVENUE',
+          description: '3.5% Platform Take Rate on BC-ORD-849201',
+          createdAt: '2026-10-26T14:30:00Z',
+        },
+      ],
+      vendorSettlements: [
+        {
+          id: 'stl_01',
+          settlementNumber: 'BC-SETTLE-2026-0042',
+          vendorId: 'usr_vend_01',
+          vendorName: 'Agarwal Cement & Steel Traders',
+          periodStart: '2026-10-20',
+          periodEnd: '2026-10-26',
+          grossSales: 185000,
+          platformCommission: 6475,
+          gatewayDeductions: 3330,
+          netPayable: 175195,
+          status: 'settled',
+          settlementDate: '2026-10-26T18:00:00Z',
+          utrNumber: 'HDFCR520261026991024',
+        },
+      ],
+      deliveryAgents: INITIAL_DELIVERY_AGENTS,
+      deliveryAssignments: [
+        {
+          id: 'del_asgn_01',
+          orderId: 'ord_01',
+          orderNumber: 'BC-ORD-849201',
+          vendorId: 'usr_vend_01',
+          vendorName: 'Agarwal Cement & Steel Traders',
+          pickupAddress: 'Yard #7, Industrial Suburb, Yeshwantpur, Bengaluru',
+          deliveryAddress: 'Plot #42, Green Glen Layout, Bellandur, Bengaluru',
+          customerName: 'Vikram Malhotra',
+          customerPhone: '+91 98201 44521',
+          deliveryAgentId: 'agent_01',
+          agentName: 'Ganesh Shinde',
+          agentPhone: '+91 97654 32100',
+          vehicleType: 'Tata 407 Tipper (4-Tonne)',
+          estimatedWeightKg: 5000,
+          status: 'in_transit',
+          deliveryCharge: 800,
+          createdAt: '2026-10-26T18:00:00Z',
+          updatedAt: '2026-10-26T20:15:00Z',
+        },
+      ],
+      notifications: INITIAL_NOTIFICATIONS,
+      priceAlerts: [],
+      reviews: [
+        {
+          id: 'rev_01',
+          userId: 'usr_cust_01',
+          userName: 'Vikram Malhotra',
+          targetType: 'material',
+          targetId: 'mat_01',
+          orderOrBookingId: 'ord_01',
+          rating: 5,
+          comment: 'Genuine UltraTech 53 grade cement. Verified fresh batch code, bags were undamaged and delivered on tipper.',
+          verifiedTransaction: true,
+          status: 'published',
+          createdAt: '2026-10-25T11:00:00Z',
+        },
+      ],
+      supportTickets: [],
+      auditLogs: [
+        {
+          id: 'audit_01',
+          actorId: 'usr_adm_01',
+          actorName: 'Pavan Garke',
+          actorRole: 'admin',
+          action: 'APPROVE_VENDOR_KYC',
+          targetType: 'vendor',
+          targetId: 'usr_vend_01',
+          details: 'Trade license and GSTIN verified via MCA registry.',
+          timestamp: '2026-10-20T09:00:00Z',
+        },
+      ],
+      platformSettings: INITIAL_SETTINGS,
+    };
+
+    this.saveData(defaultData);
+    return defaultData;
+  }
+
+  private saveData(dataToSave: DatabaseSchema = this.data) {
+    try {
+      if (!fs.existsSync(DB_DIR)) {
+        fs.mkdirSync(DB_DIR, { recursive: true });
+      }
+      fs.writeFileSync(DB_FILE, JSON.stringify(dataToSave, null, 2), 'utf-8');
+    } catch (err) {
+      console.error('Error persisting database:', err);
+    }
+  }
+
+  // Users
+  getUsers(): User[] {
+    return this.data.users.map(sanitizeUser);
+  }
+
+  getUserById(id: string): User | undefined {
+    const user = this.data.users.find((u) => u.id === id);
+    return user ? sanitizeUser(user) : undefined;
+  }
+
+  getUserByEmail(email: string): User | undefined {
+    const user = this.data.users.find((u) => u.email.toLowerCase() === email.toLowerCase());
+    return user ? sanitizeUser(user) : undefined;
+  }
+
+  getRawUserByEmail(email: string): StoredUser | undefined {
+    return this.data.users.find((u) => u.email.toLowerCase() === email.trim().toLowerCase());
+  }
+
+  getRawUserById(id: string): StoredUser | undefined {
+    return this.data.users.find((u) => u.id === id);
+  }
+
+  createUser(user: StoredUser): User {
+    this.data.users.push(user);
+    this.saveData();
+    return sanitizeUser(user);
+  }
+
+  updateUser(id: string, updates: Partial<StoredUser>): User | undefined {
+    const user = this.data.users.find((u) => u.id === id);
+    if (!user) return undefined;
+    Object.assign(user, updates);
+    this.saveData();
+    return sanitizeUser(user);
+  }
+
+  deleteUser(id: string): boolean {
+    const idx = this.data.users.findIndex((u) => u.id === id);
+    if (idx === -1) return false;
+    this.data.users.splice(idx, 1);
+    if (this.data.sessions) {
+      this.data.sessions = this.data.sessions.filter((s) => s.userId !== id);
+    }
+    this.saveData();
+    return true;
+  }
+
+  // Auth Sessions
+  createSession(userId: string): AuthSession {
+    if (!this.data.sessions) this.data.sessions = [];
+    const now = Date.now();
+    const token = crypto.randomBytes(32).toString('hex');
+    const session: AuthSession = {
+      token,
+      userId,
+      createdAt: new Date(now).toISOString(),
+      expiresAt: new Date(now + 1000 * 60 * 60 * 24 * 14).toISOString(), // 14 days
+    };
+    this.data.sessions.push(session);
+    this.saveData();
+    return session;
+  }
+
+  getSession(token: string): AuthSession | undefined {
+    if (!token || !this.data.sessions) return undefined;
+    const session = this.data.sessions.find((s) => s.token === token);
+    if (!session) return undefined;
+    if (new Date(session.expiresAt).getTime() <= Date.now()) {
+      this.deleteSession(token);
+      return undefined;
+    }
+    return session;
+  }
+
+  deleteSession(token: string): boolean {
+    if (!token || !this.data.sessions) return false;
+    const before = this.data.sessions.length;
+    this.data.sessions = this.data.sessions.filter((s) => s.token !== token);
+    if (this.data.sessions.length !== before) {
+      this.saveData();
+      return true;
+    }
+    return false;
+  }
+
+  // Materials
+  getMaterials(): MaterialProduct[] {
+    return this.data.materials;
+  }
+
+  getMaterialById(id: string): MaterialProduct | undefined {
+    return this.data.materials.find((m) => m.id === id);
+  }
+
+  createMaterial(product: MaterialProduct): MaterialProduct {
+    this.data.materials.unshift(product);
+    this.saveData();
+    return product;
+  }
+
+  updateMaterial(id: string, updates: Partial<MaterialProduct>): MaterialProduct | undefined {
+    const mat = this.getMaterialById(id);
+    if (!mat) return undefined;
+    Object.assign(mat, updates);
+    this.evaluatePriceAlertsForMaterial(mat);
+    this.saveData();
+    return mat;
+  }
+
+  deleteMaterial(id: string): boolean {
+    const idx = this.data.materials.findIndex((m) => m.id === id);
+    if (idx === -1) return false;
+    this.data.materials.splice(idx, 1);
+    this.saveData();
+    return true;
+  }
+
+  decrementStock(productId: string, quantity: number): boolean {
+    const mat = this.getMaterialById(productId);
+    if (!mat || mat.availableStock < quantity) return false;
+    mat.availableStock -= quantity;
+    if (mat.availableStock === 0) mat.status = 'out_of_stock';
+    this.saveData();
+    return true;
+  }
+
+  restoreStock(productId: string, quantity: number): boolean {
+    const mat = this.getMaterialById(productId);
+    if (!mat || quantity <= 0) return false;
+    mat.availableStock += quantity;
+    if (mat.availableStock > 0 && mat.status === 'out_of_stock') {
+      mat.status = 'active';
+    }
+    this.saveData();
+    return true;
+  }
+
+  // Equipment
+  getEquipment(): EquipmentListing[] {
+    return this.data.equipment;
+  }
+
+  getEquipmentById(id: string): EquipmentListing | undefined {
+    return this.data.equipment.find((e) => e.id === id);
+  }
+
+  createEquipment(listing: EquipmentListing): EquipmentListing {
+    this.data.equipment.unshift(listing);
+    this.saveData();
+    return listing;
+  }
+
+  // Bookings
+  getEquipmentBookings(): EquipmentBooking[] {
+    return this.data.equipmentBookings;
+  }
+
+  createEquipmentBooking(booking: EquipmentBooking): EquipmentBooking {
+    this.data.equipmentBookings.unshift(booking);
+    // Block dates
+    const eq = this.getEquipmentById(booking.equipmentId);
+    if (eq) {
+      eq.blockedDates.push(booking.startDate);
+    }
+    this.saveData();
+    return booking;
+  }
+
+  // Professionals
+  getProfessionals(): ProfessionalProfile[] {
+    return this.data.professionals;
+  }
+
+  getProfessionalById(id: string): ProfessionalProfile | undefined {
+    return this.data.professionals.find((p) => p.id === id);
+  }
+
+  createProfessional(pro: ProfessionalProfile): ProfessionalProfile {
+    this.data.professionals.unshift(pro);
+    this.saveData();
+    return pro;
+  }
+
+  updateProfessional(id: string, updates: Partial<ProfessionalProfile>): ProfessionalProfile | undefined {
+    const pro = this.getProfessionalById(id);
+    if (!pro) return undefined;
+    Object.assign(pro, updates);
+    if (updates.profilePic && !updates.avatarUrl) {
+      pro.avatarUrl = updates.profilePic;
+    }
+    if (updates.avatarUrl && !updates.profilePic) {
+      pro.profilePic = updates.avatarUrl;
+    }
+    this.saveData();
+    return pro;
+  }
+
+  deleteProfessional(id: string): boolean {
+    const idx = this.data.professionals.findIndex((p) => p.id === id);
+    if (idx === -1) return false;
+    this.data.professionals.splice(idx, 1);
+    this.saveData();
+    return true;
+  }
+
+  addProfessionalProject(id: string, project: ProjectSample): ProfessionalProfile | undefined {
+    const pro = this.getProfessionalById(id);
+    if (!pro) return undefined;
+    if (!pro.portfolioProjects) {
+      pro.portfolioProjects = [];
+    }
+    pro.portfolioProjects.unshift(project);
+    this.saveData();
+    return pro;
+  }
+
+  deleteProfessionalProject(id: string, projectId: string): ProfessionalProfile | undefined {
+    const pro = this.getProfessionalById(id);
+    if (!pro || !pro.portfolioProjects) return undefined;
+    const idx = pro.portfolioProjects.findIndex((p) => p.id === projectId);
+    if (idx !== -1) {
+      pro.portfolioProjects.splice(idx, 1);
+      this.saveData();
+    }
+    return pro;
+  }
+
+  getProfessionalBookings(professionalId?: string): ProfessionalBooking[] {
+    if (professionalId) {
+      return this.data.professionalBookings.filter(
+        (b) =>
+          b.professionalId === professionalId ||
+          b.professionalId === `pro_${professionalId}` ||
+          (professionalId.startsWith('usr_') && b.professionalId === professionalId.replace('usr_', ''))
+      );
+    }
+    return this.data.professionalBookings;
+  }
+
+  updateProfessionalBookingStatus(
+    id: string,
+    status: 'scheduled' | 'in_progress' | 'completed' | 'cancelled',
+    notes?: string
+  ): ProfessionalBooking | undefined {
+    const booking = this.data.professionalBookings.find((b) => b.id === id);
+    if (!booking) return undefined;
+    booking.status = status;
+    if (notes !== undefined) {
+      booking.engineerNotes = notes;
+    }
+    this.saveData();
+    return booking;
+  }
+
+  createProfessionalBooking(booking: ProfessionalBooking): ProfessionalBooking {
+    this.data.professionalBookings.unshift(booking);
+    this.saveData();
+    return booking;
+  }
+
+  // Labour
+  getLabourers(): LabourProfile[] {
+    return this.data.labourers;
+  }
+
+  getLabourerById(id: string): LabourProfile | undefined {
+    return this.data.labourers.find((l) => l.id === id);
+  }
+
+  updateLabourer(id: string, updates: Partial<LabourProfile>): LabourProfile | undefined {
+    const lab = this.getLabourerById(id);
+    if (!lab) return undefined;
+    Object.assign(lab, updates);
+    this.saveData();
+    return lab;
+  }
+
+  getLabourRequests(): LabourRequest[] {
+    return this.data.labourRequests;
+  }
+
+  createLabourRequest(req: LabourRequest): LabourRequest {
+    this.data.labourRequests.unshift(req);
+    this.saveData();
+    return req;
+  }
+
+  // Contractors
+  getContractors(): ContractorProfile[] {
+    return this.data.contractors;
+  }
+
+  getContractorById(id: string): ContractorProfile | undefined {
+    return this.data.contractors.find((c) => c.id === id);
+  }
+
+  getQuotations(): ContractorQuotation[] {
+    return this.data.contractorQuotations;
+  }
+
+  createQuotation(q: ContractorQuotation): ContractorQuotation {
+    this.data.contractorQuotations.unshift(q);
+    this.saveData();
+    return q;
+  }
+
+  // Orders
+  getOrders(): Order[] {
+    return this.data.orders;
+  }
+
+  getOrderById(id: string): Order | undefined {
+    return this.data.orders.find((o) => o.id === id);
+  }
+
+  createOrder(order: Order): Order {
+    this.data.orders.unshift(order);
+    this.saveData();
+    return order;
+  }
+
+  updateOrderStatus(
+    id: string,
+    newStatus: OrderStatus,
+    note?: string,
+    deliveryAgent?: Order['deliveryAgent']
+  ): Order | undefined {
+    const order = this.getOrderById(id);
+    if (!order) return undefined;
+    order.status = newStatus;
+    order.updatedAt = new Date().toISOString();
+    order.statusHistory.push({
+      status: newStatus,
+      timestamp: order.updatedAt,
+      note,
+    });
+    if (deliveryAgent) {
+      order.deliveryAgent = deliveryAgent;
+    }
+    this.saveData();
+    return order;
+  }
+
+  updateOrderPayment(
+    id: string,
+    updates: Partial<Pick<Order, 'paymentStatus' | 'paymentReference' | 'paymentMethod' | 'gatewayOrderId' | 'status'>> & {
+      note?: string;
+    }
+  ): Order | undefined {
+    const order = this.getOrderById(id);
+    if (!order) return undefined;
+
+    if (updates.paymentStatus !== undefined) order.paymentStatus = updates.paymentStatus;
+    if (updates.paymentReference !== undefined) order.paymentReference = updates.paymentReference;
+    if (updates.paymentMethod !== undefined) order.paymentMethod = updates.paymentMethod;
+    if (updates.gatewayOrderId !== undefined) order.gatewayOrderId = updates.gatewayOrderId;
+    if (updates.status !== undefined) order.status = updates.status;
+
+    order.updatedAt = new Date().toISOString();
+    if (updates.note || updates.status) {
+      order.statusHistory.push({
+        status: order.status,
+        timestamp: order.updatedAt,
+        note: updates.note || `Payment status updated to ${order.paymentStatus}`,
+      });
+    }
+
+    this.saveData();
+    return order;
+  }
+
+  // Customer Projects
+  getProjects(customerId?: string): CustomerProject[] {
+    if (customerId) {
+      return this.data.projects.filter((p) => p.customerId === customerId);
+    }
+    return this.data.projects;
+  }
+
+  createProject(project: CustomerProject): CustomerProject {
+    if (!project.milestones || project.milestones.length === 0) {
+      project.milestones = JSON.parse(JSON.stringify(DEFAULT_PROJECT_MILESTONES));
+    }
+    this.data.projects.unshift(project);
+    this.saveData();
+    return project;
+  }
+
+  getProjectById(projectId: string): CustomerProject | undefined {
+    return this.data.projects.find((p) => p.id === projectId);
+  }
+
+  toggleMilestoneTask(projectId: string, milestoneId: string, taskId: string): CustomerProject | null {
+    const project = this.data.projects.find((p) => p.id === projectId);
+    if (!project || !project.milestones) return null;
+    const milestone = project.milestones.find((m) => m.id === milestoneId);
+    if (!milestone) return null;
+    const task = milestone.tasks.find((t) => t.id === taskId);
+    if (!task) return null;
+
+    task.completed = !task.completed;
+    if (task.completed) {
+      task.completedAt = new Date().toISOString();
+    } else {
+      delete task.completedAt;
+    }
+
+    if (milestone.tasks.length > 0) {
+      const completedCount = milestone.tasks.filter((t) => t.completed).length;
+      milestone.progressPercent = Math.round((completedCount / milestone.tasks.length) * 100);
+      if (milestone.progressPercent === 100) {
+        milestone.status = 'completed';
+        milestone.actualEndDate = new Date().toISOString().split('T')[0];
+      } else if (milestone.progressPercent > 0 && milestone.status === 'upcoming') {
+        milestone.status = 'in_progress';
+      }
+    }
+
+    this.saveData();
+    return project;
+  }
+
+  updateMilestone(projectId: string, milestoneId: string, updates: Partial<ConstructionMilestone>): CustomerProject | null {
+    const project = this.data.projects.find((p) => p.id === projectId);
+    if (!project || !project.milestones) return null;
+    const milestone = project.milestones.find((m) => m.id === milestoneId);
+    if (!milestone) return null;
+
+    Object.assign(milestone, updates);
+    this.saveData();
+    return project;
+  }
+
+  addMilestone(projectId: string, milestone: ConstructionMilestone): CustomerProject | null {
+    const project = this.data.projects.find((p) => p.id === projectId);
+    if (!project) return null;
+    if (!project.milestones) project.milestones = [];
+    project.milestones.push(milestone);
+    this.saveData();
+    return project;
+  }
+
+  // Saved Addresses
+  getAddresses(userId: string): SavedAddress[] {
+    return this.data.addresses.filter((a) => a.userId === userId);
+  }
+
+  createAddress(addr: SavedAddress): SavedAddress {
+    if (addr.isDefault) {
+      this.data.addresses.forEach((a) => {
+        if (a.userId === addr.userId) a.isDefault = false;
+      });
+    }
+    this.data.addresses.push(addr);
+    this.saveData();
+    return addr;
+  }
+
+  updateAddress(id: string, userId: string | undefined, updates: Partial<SavedAddress>): SavedAddress | undefined {
+    const addr = this.data.addresses.find((a) => a.id === id && (!userId || a.userId === userId));
+    if (!addr) return undefined;
+    if (updates.isDefault) {
+      this.data.addresses.forEach((a) => {
+        if (a.userId === addr.userId) a.isDefault = false;
+      });
+    }
+    Object.assign(addr, updates);
+    this.saveData();
+    return addr;
+  }
+
+  deleteAddress(id: string, userId?: string): boolean {
+    const idx = this.data.addresses.findIndex((a) => a.id === id && (!userId || a.userId === userId));
+    if (idx === -1) return false;
+    this.data.addresses.splice(idx, 1);
+    this.saveData();
+    return true;
+  }
+
+  // Payments & Financial Ledger
+  getPayments(customerId?: string): PaymentRecord[] {
+    if (customerId) {
+      return this.data.payments.filter((p) => p.customerId === customerId);
+    }
+    return this.data.payments;
+  }
+
+  getPaymentByOrderId(orderId: string): PaymentRecord | undefined {
+    return this.data.payments.find((p) => p.orderId === orderId);
+  }
+
+  createPayment(payment: PaymentRecord): PaymentRecord {
+    this.data.payments.unshift(payment);
+    this.saveData();
+    return payment;
+  }
+
+  updatePayment(id: string, updates: Partial<PaymentRecord>): PaymentRecord | undefined {
+    const payment = this.data.payments.find((p) => p.id === id);
+    if (!payment) return undefined;
+    Object.assign(payment, updates, { updatedAt: new Date().toISOString() });
+    this.saveData();
+    return payment;
+  }
+
+  getLedger(): FinancialLedgerEntry[] {
+    return this.data.financialLedger;
+  }
+
+  addLedgerEntry(entry: FinancialLedgerEntry): FinancialLedgerEntry {
+    this.data.financialLedger.unshift(entry);
+    this.saveData();
+    return entry;
+  }
+
+  getSettlements(vendorId?: string): VendorSettlement[] {
+    if (vendorId) {
+      return this.data.vendorSettlements.filter((s) => s.vendorId === vendorId);
+    }
+    return this.data.vendorSettlements;
+  }
+
+  // Delivery Fleet & Assignments
+  getDeliveryAgents(): DeliveryAgentProfile[] {
+    return this.data.deliveryAgents;
+  }
+
+  getDeliveryAssignments(agentId?: string): DeliveryAssignment[] {
+    if (agentId) {
+      return this.data.deliveryAssignments.filter((a) => a.deliveryAgentId === agentId);
+    }
+    return this.data.deliveryAssignments;
+  }
+
+  createDeliveryAssignment(assignment: DeliveryAssignment): DeliveryAssignment {
+    this.data.deliveryAssignments.unshift(assignment);
+    this.saveData();
+    return assignment;
+  }
+
+  updateDeliveryAssignment(
+    id: string,
+    status: DeliveryAssignment['status'],
+    proof?: DeliveryAssignment['proofOfDelivery']
+  ): DeliveryAssignment | undefined {
+    const asgn = this.data.deliveryAssignments.find((a) => a.id === id);
+    if (!asgn) return undefined;
+    asgn.status = status;
+    asgn.updatedAt = new Date().toISOString();
+    if (proof) {
+      asgn.proofOfDelivery = proof;
+    }
+    this.saveData();
+    return asgn;
+  }
+
+  // Notifications
+  getNotifications(userId: string): AppNotification[] {
+    return this.data.notifications.filter((n) => n.userId === userId);
+  }
+
+  createNotification(notif: AppNotification): AppNotification {
+    this.data.notifications.unshift(notif);
+    this.saveData();
+    return notif;
+  }
+
+  markNotificationRead(id: string): boolean {
+    const n = this.data.notifications.find((notif) => notif.id === id);
+    if (n) {
+      n.read = true;
+      this.saveData();
+      return true;
+    }
+    return false;
+  }
+
+  // Price Alerts
+  evaluatePriceAlertsForMaterial(mat: MaterialProduct): PriceAlert[] {
+    if (!this.data.priceAlerts) this.data.priceAlerts = [];
+    const triggered: PriceAlert[] = [];
+    const now = new Date().toISOString();
+
+    this.data.priceAlerts.forEach((alert) => {
+      if (alert.materialId === mat.id && alert.status === 'active') {
+        if (mat.pricePerUnit <= alert.targetPrice) {
+          alert.status = 'triggered';
+          alert.triggeredPrice = mat.pricePerUnit;
+          alert.triggeredAt = now;
+          alert.acknowledged = false;
+          alert.updatedAt = now;
+          triggered.push(alert);
+
+          this.data.notifications.unshift({
+            id: `notif_pa_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+            userId: alert.userId,
+            title: `Price Drop Alert: ${mat.name}`,
+            message: `${mat.brand} ${mat.name} dropped to ₹${mat.pricePerUnit.toLocaleString('en-IN')}/${mat.unit} (below your ₹${alert.targetPrice.toLocaleString('en-IN')} threshold).`,
+            type: 'price_alert',
+            read: false,
+            linkTab: 'materials',
+            referenceId: mat.id,
+            createdAt: now,
+          });
+        }
+      }
+    });
+
+    return triggered;
+  }
+
+  getPriceAlerts(userId?: string): PriceAlert[] {
+    if (!this.data.priceAlerts) this.data.priceAlerts = [];
+    let changed = false;
+    const now = new Date().toISOString();
+
+    this.data.priceAlerts.forEach((alert) => {
+      if (alert.status === 'active') {
+        const mat = this.getMaterialById(alert.materialId);
+        if (mat && mat.pricePerUnit <= alert.targetPrice) {
+          alert.status = 'triggered';
+          alert.triggeredPrice = mat.pricePerUnit;
+          alert.triggeredAt = now;
+          alert.acknowledged = false;
+          alert.updatedAt = now;
+          changed = true;
+
+          this.data.notifications.unshift({
+            id: `notif_pa_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+            userId: alert.userId,
+            title: `Price Drop Alert: ${mat.name}`,
+            message: `${mat.brand} ${mat.name} dropped to ₹${mat.pricePerUnit.toLocaleString('en-IN')}/${mat.unit} (below your ₹${alert.targetPrice.toLocaleString('en-IN')} threshold).`,
+            type: 'price_alert',
+            read: false,
+            linkTab: 'materials',
+            referenceId: mat.id,
+            createdAt: now,
+          });
+        }
+      }
+    });
+
+    if (changed) {
+      this.saveData();
+    }
+
+    if (userId) {
+      return this.data.priceAlerts.filter((a) => a.userId === userId);
+    }
+    return this.data.priceAlerts;
+  }
+
+  createOrUpdatePriceAlert(userId: string, materialId: string, targetPrice: number): { alert: PriceAlert; triggeredImmediately: boolean } | null {
+    const mat = this.getMaterialById(materialId);
+    if (!mat) return null;
+    if (!this.data.priceAlerts) this.data.priceAlerts = [];
+
+    const now = new Date().toISOString();
+    const existing = this.data.priceAlerts.find((a) => a.userId === userId && a.materialId === materialId);
+    const isTriggered = mat.pricePerUnit <= targetPrice;
+
+    if (existing) {
+      existing.targetPrice = targetPrice;
+      existing.currentPriceAtCreation = mat.pricePerUnit;
+      existing.materialName = mat.name;
+      existing.brand = mat.brand;
+      existing.unit = mat.unit;
+      existing.status = isTriggered ? 'triggered' : 'active';
+      existing.triggeredPrice = isTriggered ? mat.pricePerUnit : undefined;
+      existing.triggeredAt = isTriggered ? now : undefined;
+      existing.acknowledged = false;
+      existing.updatedAt = now;
+
+      if (isTriggered) {
+        this.data.notifications.unshift({
+          id: `notif_pa_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+          userId,
+          title: `Price Target Met: ${mat.name}`,
+          message: `${mat.brand} ${mat.name} is currently ₹${mat.pricePerUnit.toLocaleString('en-IN')}/${mat.unit} (meets your ₹${targetPrice.toLocaleString('en-IN')} threshold).`,
+          type: 'price_alert',
+          read: false,
+          linkTab: 'materials',
+          referenceId: mat.id,
+          createdAt: now,
+        });
+      }
+
+      this.saveData();
+      return { alert: existing, triggeredImmediately: isTriggered };
+    }
+
+    const newAlert: PriceAlert = {
+      id: `pa_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+      userId,
+      materialId: mat.id,
+      materialName: mat.name,
+      brand: mat.brand,
+      unit: mat.unit,
+      currentPriceAtCreation: mat.pricePerUnit,
+      targetPrice,
+      status: isTriggered ? 'triggered' : 'active',
+      triggeredPrice: isTriggered ? mat.pricePerUnit : undefined,
+      triggeredAt: isTriggered ? now : undefined,
+      acknowledged: false,
+      createdAt: now,
+      updatedAt: now,
+    };
+
+    this.data.priceAlerts.unshift(newAlert);
+    if (isTriggered) {
+      this.data.notifications.unshift({
+        id: `notif_pa_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+        userId,
+        title: `Price Target Met: ${mat.name}`,
+        message: `${mat.brand} ${mat.name} is currently ₹${mat.pricePerUnit.toLocaleString('en-IN')}/${mat.unit} (meets your ₹${targetPrice.toLocaleString('en-IN')} threshold).`,
+        type: 'price_alert',
+        read: false,
+        linkTab: 'materials',
+        referenceId: mat.id,
+        createdAt: now,
+      });
+    }
+
+    this.saveData();
+    return { alert: newAlert, triggeredImmediately: isTriggered };
+  }
+
+  updatePriceAlert(id: string, updates: Partial<PriceAlert>): PriceAlert | undefined {
+    if (!this.data.priceAlerts) return undefined;
+    const alert = this.data.priceAlerts.find((a) => a.id === id);
+    if (!alert) return undefined;
+
+    Object.assign(alert, updates, { updatedAt: new Date().toISOString() });
+
+    const mat = this.getMaterialById(alert.materialId);
+    if (mat && alert.status === 'active' && mat.pricePerUnit <= alert.targetPrice) {
+      const now = new Date().toISOString();
+      alert.status = 'triggered';
+      alert.triggeredPrice = mat.pricePerUnit;
+      alert.triggeredAt = now;
+      alert.acknowledged = false;
+
+      this.data.notifications.unshift({
+        id: `notif_pa_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+        userId: alert.userId,
+        title: `Price Drop Alert: ${mat.name}`,
+        message: `${mat.brand} ${mat.name} is ₹${mat.pricePerUnit.toLocaleString('en-IN')}/${mat.unit} (below your ₹${alert.targetPrice.toLocaleString('en-IN')} threshold).`,
+        type: 'price_alert',
+        read: false,
+        linkTab: 'materials',
+        referenceId: mat.id,
+        createdAt: now,
+      });
+    }
+
+    this.saveData();
+    return alert;
+  }
+
+  deletePriceAlert(id: string): boolean {
+    if (!this.data.priceAlerts) return false;
+    const idx = this.data.priceAlerts.findIndex((a) => a.id === id);
+    if (idx === -1) return false;
+    this.data.priceAlerts.splice(idx, 1);
+    this.saveData();
+    return true;
+  }
+
+  // Reviews
+  getReviews(targetType?: string, targetId?: string): ReviewRecord[] {
+    let revs = this.data.reviews;
+    if (targetType) revs = revs.filter((r) => r.targetType === targetType);
+    if (targetId) revs = revs.filter((r) => r.targetId === targetId);
+    return revs;
+  }
+
+  createReview(rev: ReviewRecord): ReviewRecord {
+    this.data.reviews.unshift(rev);
+    this.saveData();
+    return rev;
+  }
+
+  // Support Tickets
+  getTickets(userId?: string): SupportTicket[] {
+    if (userId) {
+      return this.data.supportTickets.filter((t) => t.userId === userId);
+    }
+    return this.data.supportTickets;
+  }
+
+  createTicket(t: SupportTicket): SupportTicket {
+    this.data.supportTickets.unshift(t);
+    this.saveData();
+    return t;
+  }
+
+  updateTicket(id: string, updates: Partial<SupportTicket>): SupportTicket | undefined {
+    const ticket = this.data.supportTickets.find((t) => t.id === id);
+    if (!ticket) return undefined;
+    Object.assign(ticket, updates, { updatedAt: new Date().toISOString() });
+    this.saveData();
+    return ticket;
+  }
+
+  // Audit Logs
+  getAuditLogs(): AuditLog[] {
+    return this.data.auditLogs;
+  }
+
+  logAction(
+    actorId: string,
+    actorName: string,
+    actorRole: UserRole,
+    action: string,
+    targetType: string,
+    targetId: string,
+    details: string
+  ): AuditLog {
+    const log: AuditLog = {
+      id: `audit_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+      actorId,
+      actorName,
+      actorRole,
+      action,
+      targetType,
+      targetId,
+      details,
+      timestamp: new Date().toISOString(),
+    };
+    this.data.auditLogs.unshift(log);
+    this.saveData();
+    return log;
+  }
+
+  // Settings
+  getSettings(): PlatformSettings {
+    return this.data.platformSettings;
+  }
+
+  updateSettings(settings: Partial<PlatformSettings>): PlatformSettings {
+    Object.assign(this.data.platformSettings, settings);
+    this.saveData();
+    return this.data.platformSettings;
+  }
+}
+
+export const db = new Database();
